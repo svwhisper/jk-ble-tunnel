@@ -1,0 +1,52 @@
+/*
+ * app_main.c — Node A bring-up (spec §4). Order matters:
+ *   NVS -> restore any interrupted measurement -> WiFi/SNTP -> queues ->
+ *   state cache -> tasks. BLE and the tunnel come up last so the arbiter and
+ *   caches are ready before any consumer can drive them.
+ */
+#include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "nvs_store.h"
+#include "queues.h"
+#include "state_cache.h"
+#include "config.h"
+#include "net_util.h"
+
+#include "arbiter.h"
+#include "ble_owner.h"
+#include "decoder.h"
+#include "tunnel_srv.h"
+#include "mqtt_task.h"
+#include "measure.h"
+#include "supervisor.h"
+
+static const char *TAG = "node_a";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "JK BLE tunnel — Node A (garage/central) starting");
+
+    nvs_store_init();
+    measure_init();
+    measure_check_boot();          /* restore a crash-interrupted measurement (§9) */
+
+    net_wifi_start(WIFI_SSID, WIFI_PASS);
+    net_wifi_wait(20000);
+    net_sntp_start(CFG_NTP_SERVER);
+
+    queues_init();
+    state_cache_init();
+
+    /* Task watchdog: long-running tasks subscribe (spec §11). */
+    esp_task_wdt_config_t wdt = { .timeout_ms = 15000, .idle_core_mask = 0, .trigger_panic = true };
+    esp_task_wdt_init(&wdt);
+
+    arbiter_start();               /* serialise + policy                     */
+    decoder_start();               /* frames -> state cache -> MQTT          */
+    ble_owner_start();             /* NimBLE central (the only BLE task)     */
+    mqtt_start();                  /* Node-RED path + LWT                    */
+    tunnel_srv_start();            /* Node B tunnel                          */
+    supervisor_start();            /* harvest, probes, idle-disc, meas guard */
+
+    ESP_LOGI(TAG, "Node A up");
+}

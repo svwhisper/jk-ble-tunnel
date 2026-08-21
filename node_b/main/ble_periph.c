@@ -1,0 +1,190 @@
+/*
+ * ble_periph.c — single shared GATT table + per-identity routing (spec §5/§6).
+ * NIMBLE-PASS markers flag lines whose exact NimBLE signatures/structs must be
+ * confirmed against the pinned IDF next week.
+ *
+ * WHY ONE TABLE: a BLE peripheral has exactly one attribute table shared by
+ * every connection. Registering four copies would expose four 0xFFE0 services
+ * and the app would bind the first 0xFFE1 it found — wrong unit. All four JK
+ * units share an identical layout (asserted at harvest), so we register the
+ * table ONCE and let the advertising set (address) the client connected on
+ * decide which identity — and therefore which cache — its traffic maps to.
+ */
+#include <string.h>
+#include "ble_periph.h"
+#include "config.h"
+#include "nb_state.h"
+#include "adv_mgr.h"
+#include "tunnel_cli.h"
+#include "esp_log.h"
+
+#include "host/ble_hs.h"
+#include "host/ble_gap.h"
+#include "host/ble_gatt.h"
+#include "services/gap/ble_svc_gap.h"
+
+static const char *TAG = "ble_periph";
+static uint16_t s_val_handle;     /* 0xFFE1 value handle (idx 0) */
+
+/* ---- identity resolution ------------------------------------------------ */
+static int identity_for_conn(uint16_t handle)
+{
+    struct ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(handle, &desc) != 0) return -1;     /* NIMBLE-PASS */
+    /* our_id_addr is the local (per-set random) address this conn landed on. */
+    return adv_mgr_identity_for_addr(desc.our_id_addr.val);
+}
+
+/* ---- GATT access callback (synchronous, host task) --------------------- */
+static int chr_access(uint16_t conn, uint16_t attr,
+                      struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    int id = identity_for_conn(conn);
+    if (id < 0) return BLE_ATT_ERR_UNLIKELY;
+
+    switch (ctxt->op) {
+    case BLE_GATT_ACCESS_OP_READ_CHR: {
+        /* Answer from this identity's cache — never a LAN round trip here
+         * (spec §6: the access callback blocks the host task). */
+        nb_cache_t c; nb_get_cache(id, 0, &c);
+        return os_mbuf_append(ctxt->om, c.data, c.len) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES; /* NIMBLE-PASS */
+    }
+    case BLE_GATT_ACCESS_OP_WRITE_CHR: {
+        uint8_t buf[256];
+        uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+        if (len > sizeof(buf)) len = sizeof(buf);
+        ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL);        /* NIMBLE-PASS */
+        /* Complete the ATT write immediately; forward to A (spec §6). The app
+         * confirms at the frame level via notifications, not ATT status. */
+        bool with_resp = (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR);
+        tunnel_cli_send_write(id, 0, with_resp, buf, len);
+        return 0;
+    }
+    default:
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+}
+
+static const struct ble_gatt_svc_def s_svcs[] = {
+    { .type = BLE_GATT_SVC_TYPE_PRIMARY,
+      .uuid = BLE_UUID16_DECLARE(JK_SVC_UUID),
+      .characteristics = (struct ble_gatt_chr_def[]) {
+          { .uuid = BLE_UUID16_DECLARE(JK_CHR_UUID),
+            .access_cb = chr_access,
+            .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE |
+                     BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_NOTIFY,
+            .val_handle = &s_val_handle },
+          { 0 }
+      } },
+    { 0 }
+};
+
+/* ---- notify fan-in (from tunnel) --------------------------------------- */
+void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uint16_t len)
+{
+    (void)idx;
+    nb_identity_t it; nb_get_identity(id, &it);
+    if (!it.connected || !it.notify_enabled) return;   /* CCCD filter (spec §6) */
+
+    uint16_t mtu = ble_att_mtu(it.conn_handle);        /* NIMBLE-PASS */
+    if (mtu < 23) mtu = 23;
+    uint16_t chunk = mtu - 3;                           /* re-chunk (spec §6)   */
+    for (uint16_t off = 0; off < len; off += chunk) {
+        uint16_t n = (len - off < chunk) ? (len - off) : chunk;
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(data + off, n); /* NIMBLE-PASS */
+        if (!om) break;
+        ble_gatts_notify_custom(it.conn_handle, s_val_handle, om);  /* NIMBLE-PASS */
+    }
+}
+
+void ble_periph_on_write_result(uint8_t id, uint8_t idx, uint8_t status)
+{
+    (void)idx;
+    nb_identity_t it; nb_get_identity(id, &it);
+    if (!it.connected) return;
+    if (status == TUN_WR_LINK_DOWN) {
+        ESP_LOGW(TAG, "id %u write link-down — dropping app conn (spec §6)", id);
+        ble_gap_terminate(it.conn_handle, BLE_ERR_REM_USER_CONN_TERM);   /* NIMBLE-PASS */
+    }
+    /* WRITE_FAIL_LIMIT consecutive failures also drop; counter lives in
+     * nb_state and is reset on CLIENT transitions (spec §6 hygiene). */
+}
+
+void ble_periph_drop_all(void)
+{
+    for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
+        nb_identity_t it; nb_get_identity(id, &it);
+        if (it.connected) ble_gap_terminate(it.conn_handle, BLE_ERR_REM_USER_CONN_TERM); /* NIMBLE-PASS */
+    }
+}
+
+/* ---- GAP events --------------------------------------------------------- */
+static int gap_event(struct ble_gap_event *event, void *arg)
+{
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT: {
+        if (event->connect.status != 0) return 0;
+        uint16_t h = event->connect.conn_handle;
+        int id = identity_for_conn(h);
+        if (id < 0) { ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM); return 0; }
+
+        /* One app connection at a time: accept-then-terminate a second
+         * (BLE has no reject primitive) — spec §5. */
+        if (nb_active_conn_count() >= CFG_MAX_APP_CONNS) {
+            ESP_LOGW(TAG, "2nd connection on id %u — terminating", id);
+            ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
+            return 0;
+        }
+        nb_set_conn(id, true, h);
+        adv_mgr_on_connect(id);
+        tunnel_cli_send_client(id, true);       /* drives A's connect-on-demand */
+        ESP_LOGI(TAG, "app connected -> identity %u", id);
+        return 0;
+    }
+    case BLE_GAP_EVENT_DISCONNECT: {
+        uint16_t h = event->disconnect.conn.conn_handle;
+        int id = nb_identity_for_conn(h);
+        if (id >= 0) {
+            nb_set_conn(id, false, 0);
+            adv_mgr_on_disconnect(id);
+            tunnel_cli_send_client(id, false);
+            ESP_LOGI(TAG, "app disconnected from identity %u", id);
+        }
+        return 0;
+    }
+    case BLE_GAP_EVENT_SUBSCRIBE: {
+        int id = nb_identity_for_conn(event->subscribe.conn_handle);
+        if (id >= 0) nb_set_notify(id, event->subscribe.cur_notify);  /* CCCD */
+        return 0;
+    }
+    case BLE_GAP_EVENT_MTU:
+        return 0;
+    default:
+        return 0;
+    }
+}
+/* adv_mgr's ext-adv sets are configured with this same gap_event callback so
+ * connections route here. Exposed for adv_mgr via a shared declaration. */
+int ble_periph_gap_event(struct ble_gap_event *e, void *a) { return gap_event(e, a); }
+
+/* ---- table registration ------------------------------------------------- */
+void ble_periph_rebuild_table(void)
+{
+    /* JK's layout is a single service/characteristic, identical across units,
+     * so the static definition above already is the shared table. If a future
+     * fleet needs a data-driven table, build s_svcs from the blueprint here and
+     * rotate the sets' random addresses so iOS re-discovers (spec §5 sticky
+     * cache). For now, log that the blueprint arrived. */
+    nb_blueprint_t bp; nb_get_blueprint(&bp);
+    ESP_LOGI(TAG, "blueprint received: %u char(s)", bp.char_count);
+}
+
+void ble_periph_start(void)
+{
+    ble_svc_gap_init();
+    ble_svc_gap_device_name_set("JK-Tunnel");   /* generic GAP name (spec §5) */
+
+    ble_gatts_count_cfg(s_svcs);                 /* NIMBLE-PASS */
+    ble_gatts_add_svcs(s_svcs);                  /* NIMBLE-PASS */
+    ESP_LOGI(TAG, "shared replica GATT table registered");
+}

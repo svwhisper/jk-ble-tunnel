@@ -1,0 +1,29 @@
+# Node B — BLE 5.0 target (ESP32-C3 / S3 / C6) for four advertising sets
+# (spec §5/§13). Peripheral role only.
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Bluetooth: NimBLE, peripheral + extended advertising ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+
+# Extended advertising with four simultaneous advertising sets (spec §5/O-8).
+CONFIG_BT_NIMBLE_EXT_ADV=y
+CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES=4
+# One app connection at a time (spec §5); a couple of slots for clean handoff.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+
+# --- FreeRTOS / watchdog ---
+CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_FREERTOS_HZ=1000
+
+# --- Networking ---
+CONFIG_LWIP_TCP_NODELAY_DEFAULT=y
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -1,0 +1,26 @@
+# Node A — any WiFi+BLE ESP32 (WROOM/WROVER fine; BLE central only, no BLE 5.0
+# needed). External-antenna board recommended at the battery (spec §2/§13).
+
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Bluetooth: NimBLE, central role only ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+# Concurrent central links: app-held unit + Node-RED round-robin (~3 budget).
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+
+# --- FreeRTOS / watchdog ---
+CONFIG_ESP_TASK_WDT_INIT=n            # we init TWDT ourselves with our tasks
+CONFIG_FREERTOS_HZ=1000
+
+# --- Networking ---
+CONFIG_LWIP_TCP_NODELAY_DEFAULT=y
+
+# --- Logs ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

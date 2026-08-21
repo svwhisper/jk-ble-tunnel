@@ -1,0 +1,20 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+
+# Managed components fetched by the IDF component manager
+managed_components/
+dependencies.lock
+
+# Local secrets — copy config_secret.h.example and fill in
+**/config_secret.h
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
