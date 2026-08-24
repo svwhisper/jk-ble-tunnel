@@ -10,11 +10,18 @@
 
 static const char *TAG = "net_util";
 static EventGroupHandle_t s_evt;
+static esp_netif_t *s_netif;
+static char s_hostname[33];
 #define GOT_IP (1 << 0)
 
 static void on_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) esp_wifi_connect();
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        /* Set the DHCP hostname now the netif is started, before connecting, so
+         * it goes out in the DHCP request and the server can register it. */
+        if (s_hostname[0] && s_netif) esp_netif_set_hostname(s_netif, s_hostname);
+        esp_wifi_connect();
+    }
     else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "disconnected, retrying");
         esp_wifi_connect();
@@ -23,12 +30,13 @@ static void on_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
     }
 }
 
-void net_wifi_start(const char *ssid, const char *pass)
+void net_wifi_start(const char *ssid, const char *pass, const char *hostname)
 {
     s_evt = xEventGroupCreate();
+    if (hostname) strlcpy(s_hostname, hostname, sizeof(s_hostname));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    s_netif = esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));

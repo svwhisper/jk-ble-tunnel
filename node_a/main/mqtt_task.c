@@ -163,9 +163,7 @@ void mqtt_ack(uint8_t id, const char *cmd, const char *cid,
 void mqtt_start(void)
 {
     esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = MQTT_URI,
-        .credentials.username = MQTT_USER,
-        .credentials.authentication.password = MQTT_PASS,
+        .broker.address.uri = MQTT_URI,   /* hostname; broker allows anonymous */
         /* LWT: retained offline on ungraceful disconnect (spec §7). */
         .session.last_will.topic = CFG_MQTT_BRIDGE_STATUS,
         .session.last_will.msg = "{\"online\":false}",

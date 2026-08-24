@@ -18,7 +18,7 @@ void app_main(void)
     if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND)
         { nvs_flash_erase(); nvs_flash_init(); }
 
-    net_wifi_start(WIFI_SSID, WIFI_PASS);
+    net_wifi_start(WIFI_SSID, WIFI_PASS, "jk-test");   /* reachable as jk-test for bench.py */
     net_wifi_wait(20000);
 
     ctl_server_start();   /* role selected over TCP; BLE inits on demand */

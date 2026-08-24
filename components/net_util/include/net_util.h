@@ -7,7 +7,9 @@
 
 #include <stdbool.h>
 
-void net_wifi_start(const char *ssid, const char *pass);
+/* hostname is registered with the DHCP server (DHCP option 12) so the device is
+ * reachable by name; pass NULL to keep the default. */
+void net_wifi_start(const char *ssid, const char *pass, const char *hostname);
 bool net_wifi_wait(int timeout_ms);     /* block until IP or timeout */
 void net_sntp_start(const char *server);
 

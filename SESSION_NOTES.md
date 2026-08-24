@@ -30,6 +30,12 @@ markers) and a decode-offset bench pass (`VERIFY` markers) first.
   connections through a short blip; resync replays `TABLE_REQ` → state →
   `CLIENT` for connected identities.
 - **Write-FIFO / failure-counter hygiene** reset on every `CLIENT` transition.
+- **Addressing is hostname + DHCP, no static IPs.** Each ESP32 sets its DHCP
+  hostname (`net_util` via `esp_netif_set_hostname` on STA_START); `tunnel_cli`
+  resolves Node A with `getaddrinfo` (DNS / `.local` / literal IP). Both nodes
+  enable `CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES`. Node B→A bare-name resolution
+  needs pfSense "Register DHCP leases in the DNS Resolver" (or use a `.local`
+  responder / literal IP). MQTT broker is a hostname with **no auth** (anonymous).
 
 ## Honesty boundaries (do not paper over)
 

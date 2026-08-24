@@ -25,5 +25,8 @@ CONFIG_FREERTOS_HZ=1000
 
 # --- Networking ---
 CONFIG_LWIP_TCP_NODELAY_DEFAULT=y
+# Resolve *.local via mDNS in getaddrinfo, so NODE_A_HOST may be a .local name
+# as well as a DHCP/DNS hostname or literal IP.
+CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y
 
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -4,12 +4,13 @@
  * drive adv_mgr / ble_periph.
  */
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <arpa/inet.h>
+#include <netdb.h>
 #include "tunnel_cli.h"
 #include "config.h"
 #include "nb_state.h"
@@ -103,11 +104,23 @@ static bool read_n(int s, uint8_t *b, int n)
 
 static int connect_a(void)
 {
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    struct sockaddr_in a = { .sin_family=AF_INET, .sin_port=htons(NODE_A_PORT) };
-    inet_pton(AF_INET, NODE_A_HOST, &a.sin_addr);
-    if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) { close(s); return -1; }
-    int one=1; setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    /* Resolve Node A by hostname each attempt — its address comes from DHCP and
+     * may change (spec §12). getaddrinfo handles DNS names, .local mDNS names,
+     * and literal IPs uniformly, so NODE_A_HOST can be any of them. */
+    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM };
+    struct addrinfo *res = NULL;
+    char port[8]; snprintf(port, sizeof(port), "%d", NODE_A_PORT);
+    if (getaddrinfo(NODE_A_HOST, port, &hints, &res) != 0 || !res) {
+        ESP_LOGW(TAG, "resolve '%s' failed", NODE_A_HOST);
+        return -1;
+    }
+    int s = socket(res->ai_family, res->ai_socktype, 0);
+    if (s < 0) { freeaddrinfo(res); return -1; }
+    if (connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+        close(s); freeaddrinfo(res); return -1;
+    }
+    freeaddrinfo(res);
+    int one = 1; setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     return s;
 }
 

@@ -67,6 +67,24 @@ cd test_board && idf.py set-target esp32 && idf.py build flash monitor
 Also edit the per-unit target names in [`node_a/main/config.h`](node_a/main/config.h)
 (`CFG_BMS`) and the balance ranges (`CFG_BALANCE_RANGE`) for your cells.
 
+## Networking (hostnames + DHCP)
+
+No hardcoded IPs. Each device takes its address from DHCP and registers a
+hostname (`jk-node-a`, `jk-node-b`, `jk-test`); resolution uses `getaddrinfo`,
+which accepts a DNS name, a `.local` mDNS name, or a literal IP.
+
+- **Node B → Node A** dials `NODE_A_HOST` (in `secret.h`). For the bare name to
+  resolve, your DHCP server must publish the lease in DNS — on pfSense, enable
+  *Register DHCP leases in the DNS Resolver* and set `NODE_A_HOST` to the FQDN
+  it serves (e.g. `jk-node-a.<your-domain>`). A literal IP also works if you
+  prefer.
+- **Node A → MQTT broker** uses `MQTT_URI` by hostname, **no username/password**
+  (broker allows anonymous). A `broker.local` name resolves with no DNS setup if
+  the broker host runs mDNS/avahi (Linux/macOS do) — `.local` mDNS queries are
+  enabled in both nodes' `sdkconfig.defaults`.
+- The **bench board** is reachable from your Mac as `jk-test.local` (macOS
+  resolves `.local` natively), or by its DHCP-leased IP.
+
 ## Bench without hardware
 
 ```bash
