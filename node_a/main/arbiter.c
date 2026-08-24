@@ -324,5 +324,6 @@ void arbiter_start(void)
     memset(s_pend, 0, sizeof(s_pend));
     /* Item size must equal sizeof(arb_msg_t) exactly (private to this file). */
     g_q_arb_in = xQueueCreate(24, sizeof(arb_msg_t));
-    xTaskCreatePinnedToCore(arbiter_task, "arbiter", 6144, NULL, 6, NULL, 1);
+    /* tskNO_AFFINITY: C3 is single-core; on a dual-core part this floats. */
+    xTaskCreatePinnedToCore(arbiter_task, "arbiter", 6144, NULL, 6, NULL, tskNO_AFFINITY);
 }

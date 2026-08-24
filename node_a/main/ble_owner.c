@@ -46,6 +46,13 @@ typedef struct {
 static link_t s_links[CFG_LINK_POOL_SIZE];
 static SemaphoreHandle_t s_mtx_link_pool;
 
+/* One scan/connect in flight at a time (scanning is a global radio resource).
+ * The arbiter serialises per-BMS work, so this is rarely contended. */
+static link_t *s_connecting;
+static char    s_connect_name[32];
+static int gap_event(struct ble_gap_event *event, void *arg);
+static int scan_event(struct ble_gap_event *event, void *arg);
+
 /* target selection ------------------------------------------------------- */
 static const char *name_for(uint8_t bms_id)
 {
@@ -173,6 +180,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT: {
         link_t *l = arg;   /* link chosen in the connect call */
+        s_connecting = NULL;   /* scan/connect sequence resolved */
         if (event->connect.status == 0) {
             l->conn_handle = event->connect.conn_handle;
             /* Request larger MTU, then discover the JK service. */
@@ -214,15 +222,67 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 }
 
 /* ---- transaction execution (ble_owner_task) ---------------------------- */
+/* Scan callback: match the target BMS by advertised name, then connect to
+ * whatever address it advertised (spec §5 — match on name, never MAC). */
+static int scan_event(struct ble_gap_event *event, void *arg)
+{
+    switch (event->type) {
+    case BLE_GAP_EVENT_DISC: {
+        if (!s_connecting) return 0;
+        struct ble_hs_adv_fields f;
+        if (ble_hs_adv_parse_fields(&f, event->disc.data, event->disc.length_data) != 0)
+            return 0;
+        if (!f.name_len) return 0;
+        char nm[32] = {0};
+        uint8_t n = f.name_len < 31 ? f.name_len : 31;
+        memcpy(nm, f.name, n);
+        if (strcmp(nm, s_connect_name) != 0) return 0;
+        ble_gap_disc_cancel();
+        ble_addr_t addr = event->disc.addr;
+        link_t *l = s_connecting;
+        if (ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &addr, 5000, NULL, gap_event, l) != 0) {
+            s_connecting = NULL;
+            l->txn_active = false;
+            respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
+            l->in_use = false;
+        }
+        return 0;
+    }
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        /* Scan window ended with no match -> unreachable. */
+        if (s_connecting) {
+            link_t *l = s_connecting; s_connecting = NULL;
+            set_link_state(l->bms_id, LINK_UNREACHABLE, false);
+            if (l->txn_active) { l->txn_active = false;
+                respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
+            l->in_use = false;
+        }
+        return 0;
+    default: return 0;
+    }
+}
+
 static void start_connect(link_t *l)
 {
-    /* NIMBLE-PASS: scan-by-name then ble_gap_connect to the matched address,
-     * or connect directly if CFG_BMS carries an address. For the bench rig the
-     * emulator advertises the configured name; a name filter in the scan cb
-     * selects it. Timeout/own_addr_type per IDF defaults. */
     const char *name = name_for(l->bms_id);
-    ESP_LOGI(TAG, "connecting bms %u (%s)", l->bms_id, name ? name : "?");
-    /* ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &addr, 30000, &conn_params, gap_event, l); */
+    if (!name || s_connecting) {
+        /* No target, or another connect is in flight — fail the txn; the
+         * arbiter will retry this unit on its next dispatch. */
+        l->txn_active = false;
+        respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
+        l->in_use = false;
+        return;
+    }
+    ESP_LOGI(TAG, "scanning for bms %u ('%s')", l->bms_id, name);
+    s_connecting = l;
+    strlcpy(s_connect_name, name, sizeof(s_connect_name));
+    struct ble_gap_disc_params dp = { .passive = 0 };
+    if (ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 5000, &dp, scan_event, NULL) != 0) {
+        s_connecting = NULL;
+        l->txn_active = false;
+        respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
+        l->in_use = false;
+    }
 }
 
 static void exec_request(const bms_request_t *req)

@@ -118,5 +118,5 @@ static void supervisor_task(void *arg)
 void supervisor_start(void)
 {
     memset(s_last_probe_us, 0, sizeof(s_last_probe_us));
-    xTaskCreatePinnedToCore(supervisor_task, "supervisor", 6144, NULL, 3, NULL, 1);
+    xTaskCreatePinnedToCore(supervisor_task, "supervisor", 6144, NULL, 3, NULL, tskNO_AFFINITY);
 }

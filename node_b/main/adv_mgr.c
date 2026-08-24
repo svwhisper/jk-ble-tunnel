@@ -13,6 +13,9 @@
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 
+/* Defined in ble_periph.c — all ext-adv instances route connections here. */
+extern int ble_periph_gap_event(struct ble_gap_event *e, void *a);
+
 static const char *TAG = "adv_mgr";
 
 typedef struct {
@@ -36,7 +39,9 @@ int adv_mgr_identity_for_addr(const uint8_t *addr)
     return -1;
 }
 
-/* Build legacy connectable adv data: flags + complete name + 16-bit svc UUID. */
+/* Build legacy connectable adv data: flags + complete name + 16-bit svc UUID,
+ * and load it into the instance. Legacy payload caps at 31 bytes; a name too
+ * long to fit is dropped by ble_hs_adv_set_fields (returns error). */
 static void set_adv_data(uint8_t id)
 {
     struct ble_hs_adv_fields f = {0};
@@ -46,9 +51,14 @@ static void set_adv_data(uint8_t id)
     f.name_is_complete = 1;
     ble_uuid16_t u = BLE_UUID16_INIT(JK_SVC_UUID);
     f.uuids16 = &u; f.num_uuids16 = 1; f.uuids16_is_complete = 1;
-    /* NIMBLE-PASS: for ext adv use ble_gap_ext_adv_set_data with an mbuf built
-     * from these fields (ble_hs_adv_set_fields into a buffer). */
-    ESP_LOGD(TAG, "adv data set[%u] '%s'", id, s_set[id].name);
+
+    uint8_t buf[BLE_HS_ADV_MAX_SZ]; uint8_t buf_len = 0;
+    int rc = ble_hs_adv_set_fields(&f, buf, &buf_len, sizeof(buf));
+    if (rc) { ESP_LOGE(TAG, "adv_set_fields[%u] rc=%d (name too long?)", id, rc); return; }
+    struct os_mbuf *data = ble_hs_mbuf_from_flat(buf, buf_len);
+    if (!data) return;
+    rc = ble_gap_ext_adv_set_data(id, data);
+    if (rc) ESP_LOGE(TAG, "ext_adv_set_data[%u] rc=%d", id, rc);
 }
 
 static void configure(uint8_t id)
@@ -56,14 +66,18 @@ static void configure(uint8_t id)
     struct ble_gap_ext_adv_params p = {0};
     p.connectable = 1;
     p.legacy_pdu = 1;                 /* spec §5: legacy connectable per set   */
-    p.scannable = 1;
+    p.scannable = 1;                  /* legacy connectable == ADV_IND         */
     p.own_addr_type = BLE_OWN_ADDR_RANDOM;
     p.primary_phy = BLE_HCI_LE_PHY_1M;
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
     p.sid = id;
     p.itvl_min = 0x00A0; p.itvl_max = 0x00F0;   /* ~100-150 ms */
-    /* NIMBLE-PASS: ble_gap_ext_adv_configure(id, &p, NULL, gap_event_cb, NULL); */
-    ble_gap_ext_adv_set_addr(id, s_set[id].addr);   /* NIMBLE-PASS */
+    int rc = ble_gap_ext_adv_configure(id, &p, NULL, ble_periph_gap_event, NULL);
+    if (rc) { ESP_LOGE(TAG, "ext_adv_configure[%u] rc=%d", id, rc); return; }
+
+    ble_addr_t addr = { .type = BLE_ADDR_RANDOM };
+    memcpy(addr.val, s_set[id].addr, 6);
+    ble_gap_ext_adv_set_addr(id, &addr);
     set_adv_data(id);
     s_set[id].configured = true;
 }
@@ -81,11 +95,12 @@ static void apply(uint8_t id)
     bool want = should_advertise(id);
     if (want && !s_set[id].advertising) {
         if (!s_set[id].configured) configure(id);
-        /* NIMBLE-PASS: ble_gap_ext_adv_start(id, 0, 0); */
+        int rc = ble_gap_ext_adv_start(id, 0, 0);   /* forever, unlimited events */
+        if (rc) { ESP_LOGE(TAG, "ext_adv_start[%u] rc=%d", id, rc); return; }
         s_set[id].advertising = true;
         ESP_LOGI(TAG, "adv start set[%u] '%s'", id, s_set[id].name);
     } else if (!want && s_set[id].advertising) {
-        /* NIMBLE-PASS: ble_gap_ext_adv_stop(id); */
+        ble_gap_ext_adv_stop(id);
         s_set[id].advertising = false;
         ESP_LOGI(TAG, "adv stop set[%u]", id);
     }
@@ -108,7 +123,7 @@ void adv_mgr_on_disconnect(uint8_t id)
 void adv_mgr_pause_all(void)
 {
     for (int i = 0; i < CFG_NUM_UNITS; i++)
-        if (s_set[i].advertising) { /* NIMBLE-PASS ble_gap_ext_adv_stop(i); */
+        if (s_set[i].advertising) { ble_gap_ext_adv_stop(i);
             s_set[i].advertising = false; }
     ESP_LOGW(TAG, "all advertising paused");
 }

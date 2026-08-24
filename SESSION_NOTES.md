@@ -2,12 +2,21 @@
 
 Living design/status doc. Keep current alongside code changes.
 
-## Where things stand (2026-08-21)
+## Where things stand (2026-08-24)
 
-First implementation of `jk-ble-tunnel-spec.md` rev 3, written before hardware
-is available (bench next week). Compiles-in-intent against ESP-IDF 5.x + NimBLE;
-**not yet compiled or flashed** — expect a NimBLE API-signature pass (`NIMBLE-PASS`
-markers) and a decode-offset bench pass (`VERIFY` markers) first.
+Implementation of `jk-ble-tunnel-spec.md` rev 3. **All three projects now build
+clean (zero warnings, zero errors) for `esp32c3`** on ESP-IDF v5.2.3 — the whole
+fleet is standardised on the ESP32-C3 (one part to stock; C3 covers Node A's
+central role and the bench board's dual role). The NimBLE API signatures are
+therefore compiler-verified, and the BLE activation paths are wired for real:
+Node B ext-adv (configure/set_addr/set_data/start/stop) and Node A scan-by-name
+→ connect. What remains is **runtime** verification on hardware, plus the
+decode-offset bench pass (`VERIFY` markers) — not a compile pass.
+
+Toolchain notes: C3 is single-core, so the four Node-A tasks that were pinned to
+core 1 now use `tskNO_AFFINITY`. `esp_task_wdt` is part of `esp_system` in 5.2
+(not its own component). The IDF Python env needed `idf-component-manager~=1.5` +
+`ruamel.yaml<0.18` (the auto-installed latest set was too new for the 5.2 checker).
 
 ## Design decisions carried from the spec
 
@@ -69,7 +78,8 @@ BMS + a phone). One board covers either half.
 
 ## TODO before/at bench
 
-1. Compile each project on real IDF; clear every `NIMBLE-PASS`.
+1. ~~Compile each project on real IDF~~ ✅ done (esp32c3, v5.2.3, clean). BLE
+   paths wired; runtime behavior still to be verified on hardware.
 2. Capture real frames; fix `jk_proto.c` offsets; confirm decode parity (§14.1).
 3. Fill `READ_CACHE` priming in `tunnel_srv.c send_blueprint` from the decoded
    cell/settings snapshots (left as a marker until offsets are real).

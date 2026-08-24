@@ -203,5 +203,5 @@ static void tunnel_task(void *arg)
 void tunnel_srv_start(void)
 {
     s_out = xQueueCreate(16, sizeof(tun_out_t));
-    xTaskCreatePinnedToCore(tunnel_task, "tunnel_srv", 6144, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(tunnel_task, "tunnel_srv", 6144, NULL, 5, NULL, tskNO_AFFINITY);
 }

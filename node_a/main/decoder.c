@@ -48,5 +48,5 @@ static void decoder_task(void *arg)
 
 void decoder_start(void)
 {
-    xTaskCreatePinnedToCore(decoder_task, "decoder", 6144, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(decoder_task, "decoder", 6144, NULL, 4, NULL, tskNO_AFFINITY);
 }
