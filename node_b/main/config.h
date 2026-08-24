@@ -1,12 +1,12 @@
 /*
  * config.h — Node B configuration (spec §12). Node B on a BLE 5.0 target
- * (C3/S3/C6) for four advertising sets. Secrets in config_secret.h.
+ * (C3/S3/C6) for four advertising sets. Secrets in the shared secret.h.
  */
 #ifndef CONFIG_H
 #define CONFIG_H
 
 #include "jk_ble_defs.h"
-#include "config_secret.h"   /* WIFI_*, NODE_A_HOST, NODE_A_PORT */
+#include "secret.h"          /* WIFI_*, NODE_A_HOST, NODE_A_PORT */
 
 #define CFG_NUM_UNITS            JK_MAX_UNITS   /* 4 identities */
 

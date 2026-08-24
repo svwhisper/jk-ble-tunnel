@@ -10,8 +10,8 @@ sdkconfig.old
 managed_components/
 dependencies.lock
 
-# Local secrets — copy config_secret.h.example and fill in
-**/config_secret.h
+# Local secrets — copy components/secret/secret.h.example to secret.h and fill in
+components/secret/secret.h
 
 # Editor / OS
 .vscode/

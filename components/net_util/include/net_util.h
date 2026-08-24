@@ -1,6 +1,6 @@
 /*
  * net_util.h — WiFi STA + SNTP, shared by both nodes. Credentials are passed
- * in (they live in each node's config_secret.h), never compiled in here.
+ * in (they live in the shared secret.h), never compiled in here.
  */
 #ifndef NET_UTIL_H
 #define NET_UTIL_H

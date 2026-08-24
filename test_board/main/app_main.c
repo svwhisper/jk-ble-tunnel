@@ -5,7 +5,7 @@
  */
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "config_secret.h"
+#include "secret.h"
 #include "net_util.h"
 #include "ctl_server.h"
 

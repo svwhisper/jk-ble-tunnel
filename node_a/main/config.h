@@ -1,15 +1,15 @@
 /*
  * config.h — Node A configuration surface (spec §12).
  *
- * Compile-time defaults live here. Secrets (WiFi/MQTT/PIN) come from
- * config_secret.h (git-ignored; copy config_secret.h.example). Per-unit
+ * Compile-time defaults live here. Secrets (WiFi/MQTT/PIN) come from the shared
+ * secret.h (git-ignored; copy components/secret/secret.h.example). Per-unit
  * target selection is the CFG_BMS_* table below — edit for your fleet.
  */
 #ifndef CONFIG_H
 #define CONFIG_H
 
 #include "jk_ble_defs.h"
-#include "config_secret.h"   /* WIFI_SSID/PASS, MQTT_*, JK_LOGIN_PIN */
+#include "secret.h"          /* WIFI_SSID/PASS, MQTT_*, JK_LOGIN_PIN */
 
 /* ---- Topology / identity ------------------------------------------------ */
 #define CFG_NUM_UNITS            JK_MAX_UNITS   /* 4 */

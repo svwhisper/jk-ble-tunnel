@@ -49,10 +49,10 @@ BLE/LAN range ⊆ physical access) — see the spec's Non-goals.
 Each node is its own ESP-IDF project. Pin an IDF version (5.x).
 
 ```bash
-# one-time per node: create the secrets header
-cp node_a/main/config_secret.h.example node_a/main/config_secret.h   # edit
-cp node_b/main/config_secret.h.example node_b/main/config_secret.h   # edit
-cp test_board/main/config_secret.h.example test_board/main/config_secret.h
+# one-time, ONCE for all three projects: create the shared secrets header.
+# Every device joins the same AP, so WiFi lives here a single time; the file
+# also holds Node A's MQTT/PIN and Node B's Node-A host (git-ignored).
+cp components/secret/secret.h.example components/secret/secret.h   # then edit
 
 # Node A (any WiFi+BLE ESP32)
 cd node_a && idf.py set-target esp32 && idf.py build flash monitor

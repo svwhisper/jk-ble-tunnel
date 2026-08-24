@@ -13,7 +13,7 @@ idf_component_register(
         "supervisor.c"
     INCLUDE_DIRS "."
     REQUIRES
-        common jk_proto net_util
+        common secret jk_proto net_util
         nvs_flash esp_wifi esp_event esp_netif esp_timer esp_task_wdt
         mqtt bt json lwip
 )
