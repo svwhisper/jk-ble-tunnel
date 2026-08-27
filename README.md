@@ -54,14 +54,14 @@ Each node is its own ESP-IDF project. Pin an IDF version (5.x).
 # also holds Node A's MQTT/PIN and Node B's Node-A host (git-ignored).
 cp components/secret/secret.h.example components/secret/secret.h   # then edit
 
-# Node A (any WiFi+BLE ESP32)
-cd node_a && idf.py set-target esp32 && idf.py build flash monitor
+# Node A (ESP32-C3)
+cd node_a && idf.py set-target esp32c3 && idf.py build flash monitor
 
-# Node B (BLE 5.0 target)
+# Node B (ESP32-C3)
 cd node_b && idf.py set-target esp32c3 && idf.py build flash monitor
 
-# Bench board (any BLE ESP32)
-cd test_board && idf.py set-target esp32 && idf.py build flash monitor
+# Bench board (ESP32-S3 — Lonely Binary Gold Edition)
+cd test_board && idf.py set-target esp32s3 && idf.py build flash monitor
 ```
 
 Also edit the per-unit target names in [`node_a/main/config.h`](node_a/main/config.h)

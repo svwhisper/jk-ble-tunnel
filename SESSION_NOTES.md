@@ -4,10 +4,10 @@ Living design/status doc. Keep current alongside code changes.
 
 ## Where things stand (2026-08-24)
 
-Implementation of `jk-ble-tunnel-spec.md` rev 3. **All three projects now build
-clean (zero warnings, zero errors) for `esp32c3`** on ESP-IDF v5.2.3 — the whole
-fleet is standardised on the ESP32-C3 (one part to stock; C3 covers Node A's
-central role and the bench board's dual role). The NimBLE API signatures are
+Implementation of `jk-ble-tunnel-spec.md` rev 3. **All three projects build clean
+(zero warnings, zero errors)** on ESP-IDF v5.2.3. Targets: **Node A + Node B =
+`esp32c3`**; **test board = `esp32s3`** (Lonely Binary S3 Gold Edition — dual-core,
+native USB, roomy for the bench emulator). The NimBLE API signatures are
 therefore compiler-verified, and the BLE activation paths are wired for real:
 Node B ext-adv (configure/set_addr/set_data/start/stop) and Node A scan-by-name
 → connect. What remains is **runtime** verification on hardware, plus the
