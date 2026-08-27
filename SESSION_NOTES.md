@@ -67,14 +67,24 @@ BMS + a phone). One board covers either half.
 
 **The bench board has no WiFi** (removed 2026-08-28). It is USB-tethered and its
 control channel runs over the console UART; it only ever talks to the nodes over
-Bluetooth, so WiFi was pointless. This also sidesteps a hardware fault on the
-S3 Gold Edition unit: it hears APs fine (RX, −57 dBm) but every WPA2 association
-fails at 802.11 auth (reason 2 AUTH_EXPIRE, before the 4-way handshake / before
-the PSK is used). Signature = TX/RF can't complete the auth round-trip despite
-good RX; on a shared-antenna board that points at the PA supply / RF front-end,
-not creds/AP (proven clean WPA2-CCMP b/g/n) or firmware. BLE on the same board
-works (it advertises fine). The C3 nodes use the same `net_util` WiFi path —
-validate their WiFi on their own hardware when they arrive.
+Bluetooth, so WiFi was pointless.
+
+**WiFi vs the 'Southerness' AP — an ESP32↔AP interop issue, NOT ours (2026-08-28).**
+No ESP32 can associate with the bench AP 'Southerness': it fails at 802.11 auth
+(reason 2 AUTH_EXPIRE, before the WPA2 4-way handshake, i.e. before the PSK is
+used — so not a credential problem). Proven not ours by a bare-minimum esp_wifi
+STA (BT off, no scan/hostname/PMF, none of net_util) failing identically on a
+C3, plus the S3 and a second C3 — three boards, two chip families. Tried
+PMF-capable and full 802.11k/v/r/MBO/FT: no change. The AP simply does not
+answer the ESP32's auth request while other clients connect. (An earlier note
+here blamed S3 hardware — WRONG, corrected by the multi-board + bare-stack
+reproduction.) Scan proves the AP is plain WPA2-CCMP b/g/n. Leading AP-side
+cause given "good RX but AP ignores our auth, all ESP32s, phones fine":
+**minimum-RSSI-to-associate / band-steering threshold** (the AP hears the ESP's
+weaker TX below its floor) — testable by putting a node right next to the AP;
+also check any new-device/IoT onboarding gate and the minimum data rate. Fix is
+AP-side or use an ESP-friendly AP. Bench workaround: point the nodes at a phone
+hotspot. The nodes' WiFi *code* is sound (bare stack behaves the same).
 
 ## Open items (from spec §15, tracked here)
 
