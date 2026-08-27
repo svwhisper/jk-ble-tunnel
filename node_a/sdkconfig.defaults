@@ -25,5 +25,9 @@ CONFIG_LWIP_TCP_NODELAY_DEFAULT=y
 # runs avahi) — DHCP/DNS hostnames still resolve normally too.
 CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y
 
+# --- Console over native USB (USB-Serial-JTAG) ---
+# These C3 boards enumerate as usbmodem (native USB), not a UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
 # --- Logs ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

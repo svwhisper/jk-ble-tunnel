@@ -29,4 +29,8 @@ CONFIG_LWIP_TCP_NODELAY_DEFAULT=y
 # as well as a DHCP/DNS hostname or literal IP.
 CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y
 
+# Console over native USB (USB-Serial-JTAG) — these C3 boards enumerate as
+# usbmodem (native USB), not a UART bridge.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
