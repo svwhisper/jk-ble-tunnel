@@ -18,6 +18,18 @@ core 1 now use `tskNO_AFFINITY`. `esp_task_wdt` is part of `esp_system` in 5.2
 (not its own component). The IDF Python env needed `idf-component-manager~=1.5` +
 `ruamel.yaml<0.18` (the auto-installed latest set was too new for the 5.2 checker).
 
+## Bench status (2026-08-28)
+
+Infrastructure PROVEN on real hardware + real LAN (Southerness):
+- Both C3 nodes join WiFi (TX power capped at 8.5 dBm), get DHCP, stable
+  (single boot, no task-watchdog, logs quiet).
+- Node A: MQTT broker connected (mqtt.localdomain resolves).
+- A<->B TCP tunnel established: Node B resolves jk-node-a.localdomain via
+  pfSense DNS and connects to Node A's tunnel server (`tunnel up`, tunnel=1).
+- NOT yet exercised: the BLE paths (Node A<->BMS, app<->Node B) and the JK
+  decode (VERIFY offsets, O-1) — next step is the test-board BMS emulator, or
+  a real BMS + the phone.
+
 ## Design decisions carried from the spec
 
 - **Node B = one shared GATT table, four identities by advertising address.**
