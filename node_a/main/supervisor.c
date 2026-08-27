@@ -46,10 +46,11 @@ static void harvest_tick(void)
             }
             live.valid = true;
             nvs_put_harvest(id, &live);
-        } else {
-            /* Not harvested yet: attempt a connect (also the reachability probe). */
-            arbiter_poll(id, JK_CMD_DEVICE_INFO);
         }
+        /* If not yet harvested, do NOT poll here every tick — the round-robin
+         * and the reachability probe (maintenance_tick) drive connects at a
+         * sane rate; harvest just copies the table opportunistically once a
+         * unit's link has come up. Polling here floods the arbiter. */
     }
 }
 

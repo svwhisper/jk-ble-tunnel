@@ -91,7 +91,11 @@ static void respond(uint8_t bms_id, uint16_t cmd_id, resp_status_t st,
 {
     bms_response_t r = { .bms_id = bms_id, .cmd_id = cmd_id, .status = st,
                          .frame = frame, .frame_len = len, .record = rec };
-    xQueueSend(g_q_bms_response, &r, portMAX_DELAY);
+    /* Bounded so the BLE task never blocks forever; the arbiter drains this
+     * promptly now that its own sends are bounded, so this effectively never
+     * times out. */
+    if (xQueueSend(g_q_bms_response, &r, pdMS_TO_TICKS(200)) != pdTRUE)
+        ESP_LOGW(TAG, "bms_response full — dropped (bms %u)", bms_id);
 }
 
 static void set_link_state(uint8_t id, tunnel_link_state_t s, bool held)

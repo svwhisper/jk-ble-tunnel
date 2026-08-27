@@ -41,7 +41,12 @@ typedef struct {
     bool     busy;              /* a transaction is outstanding on the link  */
     uint16_t next_cmd_id;
     int64_t  link_wait_deadline_us; /* app-write link-up guard (0 = inactive) */
+    int64_t  connect_after_us;  /* backoff: don't attempt a connect before this */
 } pend_t;
+
+#define CONNECT_BACKOFF_US (2 * 1000000LL)  /* per-unit retry gap after a failed
+                                             * connect — stops a tight retry loop
+                                             * while another unit holds the scan */
 
 static pend_t s_pend[CFG_NUM_UNITS];
 
@@ -87,20 +92,30 @@ static void dispatch(uint8_t id)
      * live unit require link_held. TXN_CONNECT brings the link up. */
     bool needs_link = (r->kind != TXN_CONNECT && r->kind != TXN_DISCONNECT);
     if (needs_link && !rt_link_held(id)) {
-        /* Not up yet. If nothing is establishing it, request a connect. */
+        /* Respect the post-failure backoff so we don't spin retrying a connect
+         * that keeps failing instantly (e.g. while another unit holds the scan
+         * slot). Leaves the request pending; a later tick retries. */
+        if (esp_timer_get_time() < p->connect_after_us) return;
+        /* Not up yet. If nothing is establishing it, request a connect.
+         * Bounded send: never block the arbiter task (else g_q_arb_in fills and
+         * its producers — incl. the watchdog-fed supervisor — block forever). */
         bms_request_t c = { .bms_id = id, .kind = TXN_CONNECT,
                             .source = SRC_INTERNAL, .response_needed = true,
                             .timeout_ms = 4000, .cmd_id = ++p->next_cmd_id };
-        p->busy = true;
-        xQueueSend(g_q_bms_request, &c, portMAX_DELAY);
+        if (xQueueSend(g_q_bms_request, &c, pdMS_TO_TICKS(20)) == pdTRUE)
+            p->busy = true;   /* retry next tick if the link queue was full */
         return;
     }
 
     bms_request_t out;
     ring_pop(p, &out);
     out.cmd_id = ++p->next_cmd_id;
-    p->busy = true;
-    xQueueSend(g_q_bms_request, &out, portMAX_DELAY);
+    if (xQueueSend(g_q_bms_request, &out, pdMS_TO_TICKS(20)) == pdTRUE)
+        p->busy = true;
+    else {
+        ring_push(p, &out);   /* couldn't dispatch; requeue, retry next tick */
+        ESP_LOGW(TAG, "bms %u req queue full, requeued", id);
+    }
 }
 
 /* ---- §10 balance-write validation -------------------------------------- */
@@ -184,7 +199,9 @@ static void on_response(const bms_response_t *rsp)
         case RESP_TIMEOUT:
         case RESP_LINK_DOWN:
         case RESP_GATT_ERR:
-            /* Arbiter timeout guard freed the link (spec §11). */
+            /* Arbiter timeout guard freed the link (spec §11). Back off before
+             * the next connect so a persistently-unreachable unit can't spin. */
+            p->connect_after_us = esp_timer_get_time() + CONNECT_BACKOFF_US;
             ESP_LOGW(TAG, "bms %u txn cmd=%u status=%d", id, rsp->cmd_id, rsp->status);
             break;
         default: break;
@@ -237,10 +254,19 @@ static void check_link_guards(void)
 }
 
 /* ---- public submit API -------------------------------------------------- */
+/* Bounded enqueue onto g_q_arb_in: producers (tunnel, mqtt, and the
+ * watchdog-fed supervisor) must never block forever if the arbiter is slow.
+ * Dropping the odd internal poll under overload is fine; it is re-issued. */
+static void arb_in_send(const arb_msg_t *m)
+{
+    if (xQueueSend(g_q_arb_in, m, pdMS_TO_TICKS(20)) != pdTRUE)
+        ESP_LOGW(TAG, "arb_in full — dropped (bms %u kind %d)", m->bms_id, m->kind);
+}
+
 void arbiter_submit(const bms_request_t *req)
 {
     arb_msg_t m = { .kind = ARB_REQ, .bms_id = req->bms_id, .req = *req };
-    xQueueSend(g_q_arb_in, &m, portMAX_DELAY);
+    arb_in_send(&m);
 }
 void arbiter_app_write(uint8_t id, uint8_t idx, bool wr, const uint8_t *d, uint8_t n)
 {
@@ -260,7 +286,7 @@ void arbiter_poll(uint8_t id, uint8_t opcode)
 void arbiter_set_app_connected(uint8_t id, bool connected)
 {
     arb_msg_t m = { .kind = ARB_APP_CONN, .bms_id = id, .connected = connected };
-    xQueueSend(g_q_arb_in, &m, portMAX_DELAY);
+    arb_in_send(&m);
 }
 static void submit_mqtt(uint8_t id, arb_mqtt_t t, const char *json, const char *cid)
 {
@@ -268,7 +294,7 @@ static void submit_mqtt(uint8_t id, arb_mqtt_t t, const char *json, const char *
     m.mqtt.type = t;
     if (json) strlcpy(m.mqtt.json, json, sizeof(m.mqtt.json));
     if (cid)  strlcpy(m.mqtt.id, cid, sizeof(m.mqtt.id));
-    xQueueSend(g_q_arb_in, &m, portMAX_DELAY);
+    arb_in_send(&m);
 }
 void arbiter_balance_set(uint8_t id, const char *json, const char *cid) { submit_mqtt(id, MQTT_BALANCE, json, cid); }
 void arbiter_measure(uint8_t id, const char *cid)                       { submit_mqtt(id, MQTT_MEASURE, NULL, cid); }
