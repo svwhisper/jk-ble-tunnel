@@ -15,9 +15,10 @@ balance-only write access over MQTT. Implements
   Any WiFi+BLE ESP32 (WROOM/WROVER fine; external antenna recommended).
 - **Node B** — BLE 5.0 peripheral (C3/S3/C6). Advertises **four identities**
   from a **single shared GATT table**; the app picks one by connecting.
-- **test_board** — a bench ESP32 driven over TCP that emulates either the iOS
-  app (BLE central → tests Node B) or a JK unit (BLE peripheral → tests Node A),
-  since neither the phone nor the batteries are on the bench yet.
+- **test_board** — a USB-tethered ESP32-S3 driven over its serial port (no
+  WiFi) that emulates either the iOS app (BLE central → tests Node B) or a JK
+  unit (BLE peripheral → tests Node A), since neither the phone nor the
+  batteries are on the bench yet.
 
 ## Status — read before flashing
 
@@ -82,26 +83,31 @@ which accepts a DNS name, a `.local` mDNS name, or a literal IP.
   (broker allows anonymous). A `broker.local` name resolves with no DNS setup if
   the broker host runs mDNS/avahi (Linux/macOS do) — `.local` mDNS queries are
   enabled in both nodes' `sdkconfig.defaults`.
-- The **bench board** is reachable from your Mac as `jk-test.local` (macOS
-  resolves `.local` natively), or by its DHCP-leased IP.
+- The **bench board has no WiFi** — it is USB-tethered and driven over its
+  serial port (§ below); it reaches the nodes over Bluetooth.
 
 ## Bench without hardware
 
+The test board is driven over its USB serial port (no WiFi). Find the port
+(macOS: `ls /dev/cu.*`, e.g. `/dev/cu.wchusbserial120`) and:
+
 ```bash
-# terminal 1: emulate a BMS so Node A has something to talk to
-tools/bench.py <board-ip>
+# emulate a BMS so Node A has something to talk to
+tools/bench.py /dev/cu.wchusbserial120
 > role bms JK-B2A20S20P
 > autopush 2000            # stream synthetic cell-info every 2 s
-
+                           # (notifies only once a central connects + subscribes)
 # ...point Node A at that name, watch MQTT jkbms/0/state/* populate.
 
-# to test Node B instead, reflash the board and:
+# to test Node B instead, reflash the board (one role per boot) and:
 > role app
 > connect JK-B2A20S20P     # by the name Node B advertises
 > sub
 > read
 > write aa5590eb9600...    # raw bytes relayed to Node A
 ```
+
+`idf.py -C test_board -p <port> monitor` works too — just type the commands.
 
 See the spec's §14 test plan for the full matrix.
 
@@ -115,7 +121,7 @@ See the spec's §14 test plan for the full matrix.
 | `node_a/main` | ble_owner, arbiter, decoder, tunnel_srv, mqtt, measure, supervisor |
 | `node_b/main` | tunnel_cli, adv_mgr, ble_periph (single shared table), supervisor |
 | `test_board/main` | ctl_server + emu_app + emu_bms + synth_frames |
-| `tools/bench.py` | drives the test board's control channel |
+| `tools/bench.py` | drives the test board's serial control channel |
 
 See [SESSION_NOTES.md](SESSION_NOTES.md) for design decisions and the open-item
 tracker.

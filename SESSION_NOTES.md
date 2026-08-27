@@ -56,12 +56,25 @@ core 1 now use `tskNO_AFFINITY`. `esp_task_wdt` is part of `esp_system` in 5.2
 
 ## Bench rig
 
-`test_board` is TCP-driven (`tools/bench.py`), one role per boot:
-- `role bms <name>` → Node A gets a target; `autopush <ms>` streams cell-info.
+`test_board` is **serial-driven** (`tools/bench.py <port>`, or `idf.py monitor`),
+one role per boot:
+- `role bms <name>` → Node A gets a target; `autopush <ms>` streams cell-info
+  (only notifies once a central connects + subscribes).
 - `role app` → Node B gets a client; `connect/sub/read/write/disconnect`.
 
 To exercise the whole A↔B↔app path at once you need two boards (or one board as
 BMS + a phone). One board covers either half.
+
+**The bench board has no WiFi** (removed 2026-08-28). It is USB-tethered and its
+control channel runs over the console UART; it only ever talks to the nodes over
+Bluetooth, so WiFi was pointless. This also sidesteps a hardware fault on the
+S3 Gold Edition unit: it hears APs fine (RX, −57 dBm) but every WPA2 association
+fails at 802.11 auth (reason 2 AUTH_EXPIRE, before the 4-way handshake / before
+the PSK is used). Signature = TX/RF can't complete the auth round-trip despite
+good RX; on a shared-antenna board that points at the PA supply / RF front-end,
+not creds/AP (proven clean WPA2-CCMP b/g/n) or firmware. BLE on the same board
+works (it advertises fine). The C3 nodes use the same `net_util` WiFi path —
+validate their WiFi on their own hardware when they arrive.
 
 ## Open items (from spec §15, tracked here)
 

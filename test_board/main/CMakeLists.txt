@@ -7,7 +7,7 @@ idf_component_register(
         "synth_frames.c"
     INCLUDE_DIRS "."
     REQUIRES
-        common secret net_util
-        nvs_flash esp_wifi esp_event esp_netif esp_timer
-        bt lwip
+        common
+        nvs_flash bt
+        driver vfs
 )

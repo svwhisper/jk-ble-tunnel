@@ -1,30 +1,36 @@
-#include <string.h>
+/*
+ * ctl_server.c — line-oriented control channel over the USB **serial** port
+ * (the board is permanently USB-tethered; no WiFi needed — it talks to the
+ * real nodes over Bluetooth). Commands are read from stdin (the console UART),
+ * events are printed to stdout. Same grammar as before (see ctl_server.h).
+ *
+ * Logs (ESP_LOGx) share this UART, so a driver line prints EVT/OK/ERR prefixes
+ * a reader can filter. Drive it with tools/bench.py <port>, `idf.py monitor`,
+ * or any serial terminal at 115200.
+ */
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include "ctl_server.h"
 #include "roles.h"
 #include "esp_log.h"
+#include "esp_vfs_dev.h"
+#include "driver/uart.h"
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "ctl";
-static volatile int s_client = -1;
 static role_t s_role = ROLE_NONE;
 
 void ctl_emit(const char *fmt, ...)
 {
-    if (s_client < 0) return;
-    char line[512];
     va_list ap; va_start(ap, fmt);
-    int n = vsnprintf(line, sizeof(line) - 2, fmt, ap);
+    vprintf(fmt, ap);
     va_end(ap);
-    if (n < 0) return;
-    line[n++] = '\n';
-    send(s_client, line, n, 0);
+    putchar('\n');
+    fflush(stdout);
 }
 
 /* hex string -> bytes; returns count. */
@@ -82,38 +88,23 @@ static void handle_line(char *line)
 
 static void ctl_task(void *arg)
 {
-    int ls = socket(AF_INET, SOCK_STREAM, 0);
-    int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    struct sockaddr_in a = { .sin_family = AF_INET, .sin_addr.s_addr = INADDR_ANY,
-                             .sin_port = htons(CTL_PORT) };
-    bind(ls, (struct sockaddr *)&a, sizeof(a));
-    listen(ls, 1);
-    ESP_LOGI(TAG, "control server on :%d", CTL_PORT);
-
+    char line[600];
+    ctl_emit("OK bench ready (serial) — 'role app' or 'role bms <name>'");
     for (;;) {
-        int c = accept(ls, NULL, NULL);
-        if (c < 0) { vTaskDelay(pdMS_TO_TICKS(200)); continue; }
-        s_client = c;
-        ctl_emit("OK bench ready — 'role app' or 'role bms <name>'");
-        char buf[600]; int fill = 0;
-        for (;;) {
-            int r = recv(c, buf + fill, sizeof(buf) - 1 - fill, 0);
-            if (r <= 0) break;
-            fill += r; buf[fill] = 0;
-            char *nl;
-            while ((nl = strchr(buf, '\n'))) {
-                *nl = 0;
-                char line[600]; strlcpy(line, buf, sizeof(line));
-                handle_line(line);
-                memmove(buf, nl + 1, fill - (nl + 1 - buf) + 1);
-                fill -= (nl + 1 - buf);
-            }
-        }
-        close(c); s_client = -1;
+        if (fgets(line, sizeof(line), stdin) != NULL) handle_line(line);
+        else vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
 void ctl_server_start(void)
 {
-    xTaskCreatePinnedToCore(ctl_task, "ctl", 6144, NULL, 5, NULL, 0);
+    /* Make stdin a blocking, line-buffered reader over the console UART. */
+    setvbuf(stdin, NULL, _IONBF, 0);
+    const int u = CONFIG_ESP_CONSOLE_UART_NUM;
+    uart_driver_install(u, 512, 0, 0, NULL, 0);
+    esp_vfs_dev_uart_use_driver(u);
+    esp_vfs_dev_uart_port_set_rx_line_endings(u, ESP_LINE_ENDINGS_CR);
+    esp_vfs_dev_uart_port_set_tx_line_endings(u, ESP_LINE_ENDINGS_CRLF);
+    xTaskCreate(ctl_task, "ctl", 6144, NULL, 5, NULL);
+    ESP_LOGI(TAG, "serial control ready on console UART%d @115200", u);
 }

@@ -1,7 +1,8 @@
 /*
- * ctl_server.h — line-oriented TCP control channel for the bench (spec §2/§14:
- * "a dedicated ESP32 test board you connect to via TCP, in lieu of an iOS
- * device"). A laptop drives the board with nc/telnet or tools/bench.py.
+ * ctl_server.h — line-oriented control channel for the bench test node, over
+ * the board's USB **serial** port (it's USB-tethered and needs no WiFi; it
+ * reaches the real nodes over Bluetooth). Drive it with tools/bench.py <port>,
+ * `idf.py monitor`, or any 115200 serial terminal.
  *
  * Commands (one per line, CRLF or LF):
  *   role app                     become the iOS-app emulator (BLE central)
@@ -23,8 +24,6 @@
  */
 #ifndef CTL_SERVER_H
 #define CTL_SERVER_H
-
-#define CTL_PORT 4000
 
 void ctl_server_start(void);
 void ctl_emit(const char *fmt, ...);      /* send an event line to the client */
