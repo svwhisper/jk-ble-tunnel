@@ -89,6 +89,13 @@ bool net_wifi_wait(int timeout_ms)
                                pdMS_TO_TICKS(timeout_ms)) & GOT_IP;
 }
 
+void net_wifi_set_txpower(int8_t max_qdbm)
+{
+    esp_wifi_set_max_tx_power(max_qdbm);
+    int8_t actual = 0; esp_wifi_get_max_tx_power(&actual);
+    ESP_LOGW(TAG, "WiFi max TX power capped at %d (%.2f dBm)", actual, actual * 0.25);
+}
+
 void net_sntp_start(const char *server)
 {
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);

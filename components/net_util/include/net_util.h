@@ -13,4 +13,10 @@ void net_wifi_start(const char *ssid, const char *pass, const char *hostname);
 bool net_wifi_wait(int timeout_ms);     /* block until IP or timeout */
 void net_sntp_start(const char *server);
 
+/* Cap WiFi TX power (units of 0.25 dBm; e.g. 34 = 8.5 dBm). Call after
+ * net_wifi_start. On a marginal USB supply, full TX power (~20 dBm) browns out
+ * the PA during transmit and 802.11 auth never completes (reason 2) — capping
+ * it fixes that. Deployment on a solid supply can raise or skip this. */
+void net_wifi_set_txpower(int8_t max_qdbm);
+
 #endif /* NET_UTIL_H */

@@ -69,22 +69,25 @@ BMS + a phone). One board covers either half.
 control channel runs over the console UART; it only ever talks to the nodes over
 Bluetooth, so WiFi was pointless.
 
-**WiFi vs the 'Southerness' AP — an ESP32↔AP interop issue, NOT ours (2026-08-28).**
-No ESP32 can associate with the bench AP 'Southerness': it fails at 802.11 auth
-(reason 2 AUTH_EXPIRE, before the WPA2 4-way handshake, i.e. before the PSK is
-used — so not a credential problem). Proven not ours by a bare-minimum esp_wifi
-STA (BT off, no scan/hostname/PMF, none of net_util) failing identically on a
-C3, plus the S3 and a second C3 — three boards, two chip families. Tried
-PMF-capable and full 802.11k/v/r/MBO/FT: no change. The AP simply does not
-answer the ESP32's auth request while other clients connect. (An earlier note
-here blamed S3 hardware — WRONG, corrected by the multi-board + bare-stack
-reproduction.) Scan proves the AP is plain WPA2-CCMP b/g/n. Leading AP-side
-cause given "good RX but AP ignores our auth, all ESP32s, phones fine":
-**minimum-RSSI-to-associate / band-steering threshold** (the AP hears the ESP's
-weaker TX below its floor) — testable by putting a node right next to the AP;
-also check any new-device/IoT onboarding gate and the minimum data rate. Fix is
-AP-side or use an ESP-friendly AP. Bench workaround: point the nodes at a phone
-hotspot. The nodes' WiFi *code* is sound (bare stack behaves the same).
+**WiFi failure ROOT CAUSE = TX power / marginal USB supply (SOLVED 2026-08-28).**
+Every ESP32 failed 802.11 auth (reason 2 AUTH_EXPIRE, pre-handshake) on EVERY
+AP — the UniFi U6-Mesh *and* an iPhone hotspot — across 3 boards. Not the AP,
+not creds, not our code. At full TX power (~20 dBm) the PA browns out the board
+on transmit (the `phy_init checksum failure` each boot is the tell), corrupting
+RF cal + the auth frames so auth never completes; low-power RX was always fine
+(hence "sees APs great, can't auth"). **Fix: cap WiFi TX power** —
+`net_wifi_set_txpower(CFG_WIFI_MAX_TX_QDBM)`; 34 (8.5 dBm) connects instantly.
+Confirmed: bare STA and Node A both get IPs on the hotspot at 8.5 dBm.
+Common factor was all boards fed from the MacBook's USB. WHOLE Fast-Roaming /
+U6-Mesh investigation was a red herring (FT was the only per-WLAN config diff,
+but disabling it changed nothing — the real cause was TX power all along).
+Deployment on a solid supply can likely raise TX power (tune CFG_WIFI_MAX_TX_QDBM
+toward 78 for range); keep it capped on the bench (MacBook-USB-powered).
+
+**Open after the WiFi fix:** Node A trips the task-watchdog (~20 s) on the bench
+because with no BMS units present, failed BLE connects back up the arbiter →
+ble_owner queues and the supervisor blocks on `xQueueSend(…, portMAX_DELAY)`.
+Fix = bounded/timeout sends (drop-or-log when full) so no task blocks forever.
 
 ## Open items (from spec §15, tracked here)
 

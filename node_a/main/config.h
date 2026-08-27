@@ -70,4 +70,9 @@ _Static_assert(CFG_MEAS_SETTLE_MS < CFG_MEAS_TIMEOUT_MS,
 #define CFG_MQTT_BRIDGE_STATUS   CFG_MQTT_BASE "/bridge/status"
 #define CFG_NTP_SERVER           "pool.ntp.org"
 
+/* WiFi TX power cap, units of 0.25 dBm (34 = 8.5 dBm). Needed on a marginal USB
+ * supply: at full power the PA browns out on transmit and 802.11 auth fails
+ * (reason 2). Raise toward 78 (~20 dBm) once on a solid supply / for range. */
+#define CFG_WIFI_MAX_TX_QDBM     34
+
 #endif /* CONFIG_H */

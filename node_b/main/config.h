@@ -26,4 +26,9 @@
 /* Terminate an app connection after this many consecutive write failures. */
 #define CFG_WRITE_FAIL_LIMIT     3
 
+/* WiFi TX power cap, units of 0.25 dBm (34 = 8.5 dBm) — marginal-USB-supply
+ * guard; at full power the PA browns out on transmit and auth fails (reason 2).
+ * Raise toward 78 (~20 dBm) on a solid supply / for range. */
+#define CFG_WIFI_MAX_TX_QDBM     34
+
 #endif /* CONFIG_H */

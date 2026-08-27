@@ -31,6 +31,7 @@ void app_main(void)
     measure_check_boot();          /* restore a crash-interrupted measurement (§9) */
 
     net_wifi_start(WIFI_SSID, WIFI_PASS, "jk-node-a");   /* DHCP hostname (spec §12) */
+    net_wifi_set_txpower(CFG_WIFI_MAX_TX_QDBM);          /* marginal-supply guard */
     net_wifi_wait(20000);
     net_sntp_start(CFG_NTP_SERVER);
 

@@ -38,6 +38,7 @@ void app_main(void)
         { nvs_flash_erase(); nvs_flash_init(); }
 
     net_wifi_start(WIFI_SSID, WIFI_PASS, "jk-node-b");   /* DHCP hostname (spec §12) */
+    net_wifi_set_txpower(CFG_WIFI_MAX_TX_QDBM);          /* marginal-supply guard */
     net_wifi_wait(20000);
 
     nb_state_init();
