@@ -61,9 +61,9 @@ typedef struct {
     int32_t   current_ma;        /* signed; + = charge                        */
     int32_t   power_mw;
     uint8_t   soc_pct;
-    int16_t   temp_dc[4];        /* deci-°C; VERIFY scale/positions            */
+    int16_t   temp_dc[4];        /* deci-°C: [0]=T1 [1]=T2 [2]=power tube      */
     uint8_t   temp_count;
-    uint16_t  cycle_count;
+    uint32_t  cycle_count;       /* u32 @182 (bench-verified)                  */
     bool      balancing;
     bool      charging;
     bool      discharging;

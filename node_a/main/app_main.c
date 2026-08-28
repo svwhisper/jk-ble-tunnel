@@ -20,6 +20,7 @@
 #include "measure.h"
 #include "supervisor.h"
 #include "display.h"
+#include "ota.h"
 
 static const char *TAG = "node_a";
 
@@ -50,6 +51,16 @@ void app_main(void)
     tunnel_srv_start();            /* Node B tunnel                          */
     supervisor_start();            /* harvest, probes, idle-disc, meas guard */
     display_start();               /* onboard OLED: role + status            */
+
+    /* Push-OTA. Start the receiver UNCONDITIONALLY: httpd binds 0.0.0.0 and
+     * serves once an IP arrives, so a node that joins WiFi late (the AP came up
+     * after boot — e.g. the garage AP's SSID was fixed after Node A powered on)
+     * still exposes :CFG_OTA_PORT without needing a reboot. Confirm the running
+     * image only once WiFi is actually up; a bad build that can't join WiFi is
+     * left unconfirmed and self-reverts on the next reset (§addendum). */
+    ota_start(CFG_OTA_PORT);
+    if (net_wifi_up()) ota_mark_valid();
+    else ESP_LOGW(TAG, "no WiFi at bringup — image left unconfirmed (rollback armed)");
 
     ESP_LOGI(TAG, "Node A up");
 }

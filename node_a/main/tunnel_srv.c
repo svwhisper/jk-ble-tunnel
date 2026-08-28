@@ -16,6 +16,7 @@
 #include "queues.h"
 #include "config.h"
 #include "arbiter.h"
+#include "mqtt_task.h"
 #include "state_cache.h"
 #include "nvs_store.h"
 #include "esp_log.h"
@@ -96,8 +97,12 @@ static void on_frame(uint8_t type, uint8_t bms_id, const uint8_t *pl, uint16_t l
         tunnel_srv_announce();
         break;
     case TUN_WRITE:                       /* [idx][withResponse][data] */
-        if (len >= 2)
+        if (len >= 2) {
+            /* Capture what the app (phone) writes to the BMS char, so we can
+             * learn the real cell-info request/handshake sequence (O-1/O-2). */
+            mqtt_publish_appwrite(bms_id, pl + 2, len - 2);
             arbiter_app_write(bms_id, pl[0], pl[1], pl + 2, len - 2);
+        }
         break;
     case TUN_CLIENT:                      /* [connected] */
         if (len >= 1) arbiter_set_app_connected(bms_id, pl[0] != 0);

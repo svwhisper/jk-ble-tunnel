@@ -10,6 +10,7 @@
  */
 #include <string.h>
 #include "ble_owner.h"
+#include "mqtt_task.h"
 #include "queues.h"
 #include "config.h"
 #include "state_cache.h"
@@ -52,6 +53,29 @@ static link_t *s_connecting;
 static char    s_connect_name[32];
 static int gap_event(struct ble_gap_event *event, void *arg);
 static int scan_event(struct ble_gap_event *event, void *arg);
+
+/* ---- diagnostic scan dump (jkbms/bridge/cmd/scan) ----------------------- */
+#define SCAN_DUMP_MAX 24
+typedef struct { ble_addr_t addr; int8_t rssi; char name[32]; } scan_rec_t;
+static scan_rec_t     s_scan[SCAN_DUMP_MAX];
+static int            s_scan_n;
+static volatile bool  s_scan_req;      /* set by MQTT cmd, serviced on BLE task */
+static volatile bool  s_scan_active;   /* a dump scan owns the radio            */
+static int scan_dump_event(struct ble_gap_event *event, void *arg);
+
+void ble_owner_scan_dump(void) { s_scan_req = true; }
+
+/* ---- raw-frame capture (jkbms/bridge/cmd/rawcap) ------------------------ */
+/* While armed, publish every raw notify chunk to jkbms/<id>/raw as hex, so the
+ * real JK frame layout can be captured remotely to pin decode offsets (O-1). */
+static volatile int64_t s_rawcap_until_us;
+void ble_owner_rawcap(int seconds)
+{
+    if (seconds < 1)   seconds = 20;
+    if (seconds > 120) seconds = 120;
+    s_rawcap_until_us = esp_timer_get_time() + (int64_t)seconds * 1000000LL;
+    ESP_LOGW(TAG, "raw-frame capture armed for %ds", seconds);
+}
 
 /* target selection ------------------------------------------------------- */
 static const char *name_for(uint8_t bms_id)
@@ -113,6 +137,11 @@ static void set_link_state(uint8_t id, tunnel_link_state_t s, bool held)
 /* ---- notify path (host task) ------------------------------------------- */
 static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
 {
+    /* Raw capture (O-1): dump the chunk as received, before reassembly — so we
+     * see the real bytes even if reassembly itself is mismatched. */
+    if (esp_timer_get_time() < s_rawcap_until_us)
+        mqtt_publish_raw(l->bms_id, data, len);
+
     uint16_t flen;
     const uint8_t *frame = jk_reasm_push(&l->reasm, data, len, &flen);
     if (!frame) return;   /* need more chunks */
@@ -269,9 +298,9 @@ static int scan_event(struct ble_gap_event *event, void *arg)
 static void start_connect(link_t *l)
 {
     const char *name = name_for(l->bms_id);
-    if (!name || s_connecting) {
-        /* No target, or another connect is in flight — fail the txn; the
-         * arbiter will retry this unit on its next dispatch. */
+    if (!name || s_connecting || s_scan_active) {
+        /* No target, another connect in flight, or a diagnostic scan owns the
+         * radio — fail the txn; the arbiter retries this unit next dispatch. */
         l->txn_active = false;
         respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         l->in_use = false;
@@ -366,10 +395,94 @@ static void sweep_timeouts(void)
     xSemaphoreGive(s_mtx_link_pool);
 }
 
+/* ---- diagnostic scan dump ---------------------------------------------- */
+static void publish_scan_dump(void)
+{
+    static char buf[2048];   /* static: keep off the host-task stack */
+    int o = snprintf(buf, sizeof(buf), "{\"n\":%d,\"devs\":[", s_scan_n);
+    for (int i = 0; i < s_scan_n && o < (int)sizeof(buf) - 96; i++) {
+        const scan_rec_t *r = &s_scan[i];
+        char safe[32]; int so = 0;         /* minimal JSON-string sanitising */
+        for (int k = 0; r->name[k] && so < (int)sizeof(safe) - 1; k++) {
+            char c = r->name[k];
+            safe[so++] = (c == '"' || c == '\\' || (unsigned char)c < 0x20) ? '.' : c;
+        }
+        safe[so] = 0;
+        o += snprintf(buf + o, sizeof(buf) - o,
+            "%s{\"a\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"t\":%d,\"rssi\":%d,\"name\":\"%s\"}",
+            i ? "," : "", r->addr.val[5], r->addr.val[4], r->addr.val[3],
+            r->addr.val[2], r->addr.val[1], r->addr.val[0], r->addr.type, r->rssi, safe);
+    }
+    if (o < (int)sizeof(buf) - 3) o += snprintf(buf + o, sizeof(buf) - o, "]}");
+    mqtt_publish_scan(buf);
+    ESP_LOGI(TAG, "scan dump: %d device(s) published to jkbms/bridge/scan", s_scan_n);
+}
+
+/* Runs on the host task (NimBLE callback). */
+static int scan_dump_event(struct ble_gap_event *event, void *arg)
+{
+    switch (event->type) {
+    case BLE_GAP_EVENT_DISC: {
+        struct ble_hs_adv_fields f;
+        char nm[32] = {0};
+        if (ble_hs_adv_parse_fields(&f, event->disc.data, event->disc.length_data) == 0
+            && f.name_len) {
+            uint8_t n = f.name_len < 31 ? f.name_len : 31;
+            memcpy(nm, f.name, n);
+        }
+        ble_addr_t a = event->disc.addr;
+        for (int i = 0; i < s_scan_n; i++)          /* dedup by address */
+            if (s_scan[i].addr.type == a.type && !memcmp(s_scan[i].addr.val, a.val, 6)) {
+                if (nm[0] && !s_scan[i].name[0]) strlcpy(s_scan[i].name, nm, sizeof(s_scan[i].name));
+                if (event->disc.rssi > s_scan[i].rssi) s_scan[i].rssi = event->disc.rssi;
+                return 0;
+            }
+        if (s_scan_n < SCAN_DUMP_MAX) {
+            s_scan[s_scan_n].addr = a;
+            s_scan[s_scan_n].rssi = event->disc.rssi;
+            strlcpy(s_scan[s_scan_n].name, nm, sizeof(s_scan[s_scan_n].name));
+            s_scan_n++;
+        }
+        return 0;
+    }
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        publish_scan_dump();
+        s_scan_active = false;
+        return 0;
+    default: return 0;
+    }
+}
+
+/* Runs on ble_owner_task. Takes the radio (cancelling any in-flight connect
+ * scan) and starts an 8 s active discovery reported by scan_dump_event. */
+static void do_scan_dump(void)
+{
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    if (s_connecting) {
+        ble_gap_disc_cancel();
+        link_t *l = s_connecting; s_connecting = NULL;
+        if (l->txn_active) { l->txn_active = false;
+            respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
+        l->in_use = false;
+    }
+    s_scan_n = 0;
+    s_scan_active = true;
+    xSemaphoreGive(s_mtx_link_pool);
+
+    ESP_LOGI(TAG, "scan dump: starting 8 s discovery");
+    struct ble_gap_disc_params dp = { .passive = 0 };
+    if (ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 8000, &dp, scan_dump_event, NULL) != 0) {
+        ESP_LOGW(TAG, "scan dump: ble_gap_disc failed");
+        s_scan_active = false;
+    }
+}
+
 /* ---- tasks ------------------------------------------------------------- */
 static void ble_owner_task(void *arg)
 {
     for (;;) {
+        if (s_scan_req && !s_scan_active) { s_scan_req = false; do_scan_dump(); }
+
         bms_request_t req;
         if (xQueueReceive(g_q_bms_request, &req, pdMS_TO_TICKS(200)) == pdTRUE)
             exec_request(&req);

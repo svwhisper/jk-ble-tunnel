@@ -44,6 +44,19 @@ void nvs_put_harvest(uint8_t bms_id, const harvest_entry_t *in)
     ESP_LOGI(TAG, "harvest[%u] '%s' ver=%d stored", bms_id, in->name, in->ver);
 }
 
+void nvs_clear_harvest_all(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    for (uint8_t i = 0; i < 8; i++) {          /* covers all possible unit ids */
+        char k[16]; harvest_key(i, k, sizeof(k));
+        nvs_erase_key(h, k);                    /* NOT_FOUND is harmless */
+    }
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGW(TAG, "harvest NVS cleared");
+}
+
 bool nvs_get_meas(meas_record_t *out)
 {
     nvs_handle_t h;

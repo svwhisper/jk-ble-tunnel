@@ -27,7 +27,8 @@ static tunnel_link_state_t s_last_link[CFG_NUM_UNITS];  /* change detection */
 static const char *cfg_name_for(uint8_t id)
 {
     for (int i = 0; i < CFG_NUM_UNITS; i++)
-        if (CFG_BMS[i].bms_id == id) return CFG_BMS[i].name;
+        if (CFG_BMS[i].bms_id == id)
+            return CFG_BMS[i].name ? CFG_BMS[i].name : "";   /* NULL = parked */
     return "";
 }
 
@@ -87,7 +88,13 @@ static void maintenance_tick(void)
 {
     int64_t now = esp_timer_get_time();
 
-    /* Round-robin one reachable-idle unit per tick for fresh telemetry. */
+    /* Round-robin one reachable-idle unit per tick for fresh telemetry.
+     * BENCH 2026-08-28 (fw 19.31): the 0x02 cell-info stream only starts after
+     * the BMS has seen DEVICE_INFO (0x97) FOLLOWED BY CELL_INFO (0x96) on the
+     * session — the esphome-jk-bms bootstrap order. Either alone elicits
+     * 0x01/0x03 replies but never a 0x02 (both single-opcode variants were
+     * tried and failed). The bootstrap pair is sent on every link-up below;
+     * this round-robin 0x96 is the keep-alive. */
     for (uint8_t k = 0; k < CFG_NUM_UNITS; k++) {
         uint8_t id = (s_rr + k) % CFG_NUM_UNITS;
         bms_runtime_t rt; state_get_runtime(id, &rt);
@@ -101,6 +108,13 @@ static void maintenance_tick(void)
          * this identity (spec §4/§5). */
         if (rt.link != s_last_link[id]) {
             tunnel_send_link(id, rt.link);
+            /* Session bootstrap on every link-up: 0x97 then 0x96 — the pair
+             * (in this order) is what makes fw 19.31 start streaming 0x02
+             * cell frames; see the round-robin note above. */
+            if (rt.link == LINK_UP) {
+                arbiter_poll(id, JK_CMD_DEVICE_INFO);
+                arbiter_poll(id, JK_CMD_CELL_INFO);
+            }
             s_last_link[id] = rt.link;
         }
 

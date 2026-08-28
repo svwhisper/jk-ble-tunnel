@@ -19,18 +19,33 @@ static const uint8_t JK02_CMD_MAGIC[4] = {0xAA, 0x55, 0x90, 0xEB};
 /* Fixed record length for JK02 variants. VERIFY (reference uses ~300). */
 #define JK02_RECORD_LEN 300
 
-/* --- Decode offsets (JK02_32S). ALL VERIFY. These are the single most
- *     important thing to confirm on the bench; a wrong offset silently
- *     mis-reads a protection device. ------------------------------------- */
+/* --- Decode offsets (JK02_32S layout, 300-byte record).
+ *     BENCH-VERIFIED 2026-08-28 against live frames captured from a real
+ *     JK-PB2A16S20P (fw 19.31, "BMS 1-01") via Node A rawcap: every field
+ *     below was cross-checked against physical reality (16 cells @ ~3.345 V,
+ *     pack 53.527 V, -133 mA idle, 16.0/16.4 C garage temps, SOC 98 %,
+ *     314 Ah nominal = the EVE MB31 fleet). Matches syssi/esphome-jk-bms
+ *     JK02_32S. 16S units populate cells 1-16 and OFF_CELL_MASK=0x0000FFFF. */
 #define OFF_RECORD_TYPE     4    /* record type byte                          */
-#define OFF_CELL_V_BASE     6    /* first cell voltage, u16 LE mV, 2B stride   */
-#define OFF_CELL_R_BASE     80   /* first cell wire resistance, u16 LE mOhm    */
-#define OFF_WIRE_WARN       114  /* per-wire warning bitmask (spec §8/§9)      */
-#define OFF_PACK_V          118  /* pack voltage, u32 LE, 1mV                  */
-#define OFF_PACK_I          126  /* pack current, s32 LE, 1mA (+ = charge)     */
-#define OFF_SOC             141  /* state of charge, u8 %                      */
-#define OFF_ERROR_MASK      134  /* main error bitmask, u32 LE                 */
-#define OFF_CYCLE_COUNT     150  /* cycle count, u16 LE                        */
+#define OFF_CELL_V_BASE     6    /* 32 x u16 LE cell mV                        */
+#define OFF_CELL_MASK       70   /* enabled-cell bitmask, u32 LE               */
+#define OFF_CELL_AVG        74   /* average cell mV, u16 LE                    */
+#define OFF_CELL_DELTA      76   /* max-min delta mV, u16 LE                   */
+#define OFF_CELL_R_BASE     80   /* 32 x u16 LE wire resistance, mOhm          */
+#define OFF_MOS_TEMP        144  /* power-tube temp, s16 LE, 0.1 C             */
+#define OFF_WIRE_WARN       146  /* per-wire warning bitmask, u32 LE           */
+#define OFF_PACK_V          150  /* pack voltage, u32 LE, 1 mV                 */
+#define OFF_PACK_P          154  /* pack power, u32 LE, 1 mW (unsigned)        */
+#define OFF_PACK_I          158  /* pack current, s32 LE, 1 mA (+ = charge)    */
+#define OFF_TEMP1           162  /* T1, s16 LE, 0.1 C                          */
+#define OFF_TEMP2           164  /* T2, s16 LE, 0.1 C                          */
+#define OFF_ERROR_MASK      166  /* error bitmask, u16 LE                      */
+#define OFF_BAL_CURRENT     168  /* balance current, s16 LE, 1 mA              */
+#define OFF_BAL_ACTION      170  /* 0 = off, 1 = charge-bal, 2 = discharge-bal */
+#define OFF_SOC             173  /* state of charge, u8 %                      */
+#define OFF_CAP_REMAIN      174  /* remaining capacity, u32 LE, mAh            */
+#define OFF_CAP_NOMINAL     178  /* nominal capacity, u32 LE, mAh              */
+#define OFF_CYCLE_COUNT     182  /* cycle count, u32 LE                        */
 
 /* ---- little-endian readers --------------------------------------------- */
 static inline uint16_t rd_u16(const uint8_t *p) { return p[0] | (p[1] << 8); }
@@ -141,29 +156,35 @@ int jk_decode_cell_info(jk_frame_ver_t ver, const uint8_t *frame, uint16_t len,
     memset(out, 0, sizeof(*out));
     out->ver = ver;
 
-    /* Cell count differs by variant; VERIFY. 32S carries up to 32. */
-    uint8_t n = (ver == JK_FRAME_JK02_24S) ? 24 : 32;
-    if (n > JK_MAX_CELLS) n = JK_MAX_CELLS;
-    out->cell_count = n;
-
-    for (uint8_t i = 0; i < n; i++) {
-        out->cells[i].n  = i + 1;
-        out->cells[i].mv = rd_u16(&frame[OFF_CELL_V_BASE + i * 2]);
+    /* Cell count comes from the enabled-cell bitmask (0x0000FFFF on the 16S
+     * fleet), so 17-32 are never emitted as phantom cells. */
+    uint32_t mask = rd_u32(&frame[OFF_CELL_MASK]);
+    uint8_t k = 0;
+    for (uint8_t i = 0; i < 32 && k < JK_MAX_CELLS; i++) {
+        if (!(mask & (1u << i))) continue;
+        out->cells[k].n  = i + 1;
+        out->cells[k].mv = rd_u16(&frame[OFF_CELL_V_BASE + i * 2]);
         uint16_t raw_r   = rd_u16(&frame[OFF_CELL_R_BASE + i * 2]);
         /* Spec §9: raw 0 == measurement failed -> store as null (-1). */
-        out->cells[i].r_mohm = (raw_r == 0) ? -1 : (int32_t)raw_r;
+        out->cells[k].r_mohm = (raw_r == 0) ? -1 : (int32_t)raw_r;
+        k++;
     }
+    out->cell_count = k;
 
     out->wire_warn_bitmask = rd_u32(&frame[OFF_WIRE_WARN]);
-    out->error_bitmask     = rd_u32(&frame[OFF_ERROR_MASK]);
+    out->error_bitmask     = rd_u16(&frame[OFF_ERROR_MASK]);
     out->pack_mv           = (int32_t)rd_u32(&frame[OFF_PACK_V]);
     out->current_ma        = rd_s32(&frame[OFF_PACK_I]);
     out->soc_pct           = frame[OFF_SOC];
-    out->cycle_count       = rd_u16(&frame[OFF_CYCLE_COUNT]);
+    out->cycle_count       = rd_u32(&frame[OFF_CYCLE_COUNT]);
     out->power_mw          = (int32_t)(((int64_t)out->pack_mv * out->current_ma) / 1000);
     out->charging          = out->current_ma > 0;
     out->discharging       = out->current_ma < 0;
-    /* balancing bool + temps: VERIFY offsets, wire in once bench-confirmed. */
+    out->balancing         = frame[OFF_BAL_ACTION] != 0;
+    out->temp_dc[0] = (int16_t)rd_u16(&frame[OFF_TEMP1]);      /* 0.1 C */
+    out->temp_dc[1] = (int16_t)rd_u16(&frame[OFF_TEMP2]);
+    out->temp_dc[2] = (int16_t)rd_u16(&frame[OFF_MOS_TEMP]);   /* power tube */
+    out->temp_count = 3;
     return 0;
 }
 
@@ -176,13 +197,13 @@ int jk_decode_settings(jk_frame_ver_t ver, const uint8_t *frame, uint16_t len,
     out->ver = ver;
     out->raw_len = (len < JK_SETTINGS_RAW_MAX) ? len : JK_SETTINGS_RAW_MAX;
     memcpy(out->raw, frame, out->raw_len);
-    /*
-     * VERIFY (O-2): port balance_trigger_voltage, balance current limit and
-     * the balancing-enabled bit offsets from the reference settings parser.
-     * Left unpopulated until then so nothing downstream trusts a guessed
-     * number. raw[] is captured so readback-compare (spec §10.5) still works
-     * byte-for-byte even before named fields are decoded.
-     */
+    /* BENCH-VERIFIED 2026-08-28 from a live 0x01 frame (values matched the
+     * unit's real config: trigger 0.010 V, max balance 2.000 A, balancer on,
+     * UVP 2.500/OVP 3.650, cell count 16 @ offset 114). Layout = esphome
+     * JK02_32S settings record. */
+    out->balance_trigger_v = rd_u32(&frame[26]) / 1000.0f;
+    out->balance_current_a = rd_u32(&frame[78]) / 1000.0f;
+    out->balancing_enabled = rd_u32(&frame[126]) != 0;
     return 0;
 }
 
@@ -191,9 +212,14 @@ int jk_decode_device_info(const uint8_t *frame, uint16_t len,
                           jk_device_info_t *out)
 {
     if (jk_frame_record(frame, len) != JK_REC_DEVICE_INFO) return -1;
+    if (len < 62) return -1;
     memset(out, 0, sizeof(*out));
     out->ver = jk_detect_version(frame, len);
-    /* VERIFY: device name / fw / hw string offsets from reference. */
+    /* BENCH-VERIFIED 2026-08-28 from a live 0x03 frame: vendor/model @6
+     * ("JK-PB2A16S20P"), hw @22, sw @30 ("19.31"), device name @46 ("BMS 1"). */
+    memcpy(out->hw_version, &frame[22], 8);  out->hw_version[8]  = 0;
+    memcpy(out->fw_version, &frame[30], 8);  out->fw_version[8]  = 0;
+    memcpy(out->name,       &frame[46], 16); out->name[16]       = 0;
     return 0;
 }
 
@@ -205,8 +231,20 @@ int jk_build_read_cmd(uint8_t opcode, uint8_t *out, size_t out_cap)
     memcpy(out, JK02_CMD_MAGIC, 4);
     out[4] = opcode;             /* JK_CMD_CELL_INFO / JK_CMD_DEVICE_INFO      */
     out[5] = 0x00;               /* length/value fields zero for a plain read  */
-    /* VERIFY: reference sets bytes 6..18 (value + reserved) then a trailing
-     * checksum at [19]. A wrong read command is harmless (BMS ignores it). */
+    /* BENCH OBSERVATION 2026-08-28 (fw 19.31): the official app's 0x97 fills
+     * bytes 6..18 with what looks like a random nonce (two captured samples
+     * differed, both accepted), and the cell-info (0x02) stream only started
+     * after such a 0x97 — our zero-filled 0x97 got a 0x03 reply but no stream.
+     * Mimic the app: fill 6..18 with pseudo-random bytes for 0x97. Harmless
+     * either way (it is a read command). xorshift, not esp_random, so this
+     * still builds for the native host test. */
+    if (opcode == JK_CMD_DEVICE_INFO) {
+        static uint32_t s = 0x9E3779B9u;
+        for (int i = 6; i <= 18; i++) {
+            s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+            out[i] = (uint8_t)s;
+        }
+    }
     uint8_t sum = 0;
     for (int i = 0; i < JK_CMD_FRAME_LEN - 1; i++) sum += out[i];
     out[JK_CMD_FRAME_LEN - 1] = sum;

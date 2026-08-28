@@ -8,8 +8,9 @@
 #include "jk_ble_defs.h"
 #include "secret.h"          /* WIFI_*, NODE_A_HOST, NODE_A_PORT */
 
-/* BENCH: 1 identity (match Node A). Production = JK_MAX_UNITS (4). */
-#define CFG_NUM_UNITS            1
+/* Four identities, matching Node A's four garage units (unit 0 parked on A, so
+ * its clone stays down; units 1-3 are live and connectable by the phone). */
+#define CFG_NUM_UNITS            4
 
 /* Advertising (spec §5): legacy-format connectable PDUs per set for app compat.
  * One app connection at a time; the other sets stay advertising. */
@@ -21,6 +22,10 @@
 /* Tunnel (spec §6). */
 #define CFG_TUNNEL_PING_MS       5000
 #define CFG_TUNNEL_DEAD_MS       15000
+
+/* Push-OTA receiver: nonstandard, unused port; host POSTs the new .bin here.
+ * Must match ota_push.py's default --port. Always listening. */
+#define CFG_OTA_PORT             3765
 #define CFG_TUNNEL_GRACE_MS      8000  /* hold app conns through a short blip       */
 #define CFG_TUNNEL_RECONNECT_MS  1000
 

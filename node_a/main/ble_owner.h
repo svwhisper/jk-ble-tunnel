@@ -18,4 +18,16 @@ void ble_owner_start(void);
  * and discovery completed). Used by the harvest coordinator. */
 bool ble_owner_copy_table(uint8_t bms_id, harvest_entry_t *out);
 
+/* Request a one-shot diagnostic BLE scan: report every advertiser seen (name,
+ * address, RSSI) to MQTT topic jkbms/bridge/scan. Non-invasive; runs on the
+ * BLE task, briefly preempting the connect loop. Triggered by the MQTT command
+ * jkbms/bridge/cmd/scan. Use it to discover the units' real advertised names
+ * and Node A's actual RSSI to each. */
+void ble_owner_scan_dump(void);
+
+/* Arm raw-frame capture for `seconds`: every notify chunk received from a unit
+ * is published as hex to jkbms/<id>/raw. Triggered by jkbms/bridge/cmd/rawcap.
+ * Used to capture real JK frames and pin the decode offsets (O-1). */
+void ble_owner_rawcap(int seconds);
+
 #endif /* BLE_OWNER_H */

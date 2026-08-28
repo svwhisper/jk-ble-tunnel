@@ -14,6 +14,7 @@
 #include "tunnel_cli.h"
 #include "supervisor.h"
 #include "display.h"
+#include "ota.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -56,6 +57,14 @@ void app_main(void)
     tunnel_cli_start();           /* connect to Node A, resync, grace window    */
     supervisor_start();
     display_start();              /* onboard OLED: role + status                */
+
+    /* Push-OTA. Start the receiver UNCONDITIONALLY: httpd binds 0.0.0.0 and
+     * serves once an IP arrives, so a node that joins WiFi late still exposes
+     * :CFG_OTA_PORT without a reboot. Confirm the running image only once WiFi
+     * is up; a bad build that can't join is left unconfirmed and self-reverts. */
+    ota_start(CFG_OTA_PORT);
+    if (net_wifi_up()) ota_mark_valid();
+    else ESP_LOGW(TAG, "no WiFi at bringup — image left unconfirmed (rollback armed)");
 
     ESP_LOGI(TAG, "Node B up");
 }

@@ -33,6 +33,7 @@ void nvs_store_init(void);
 /* Harvest table per unit. */
 bool nvs_get_harvest(uint8_t bms_id, harvest_entry_t *out);
 void nvs_put_harvest(uint8_t bms_id, const harvest_entry_t *in);
+void nvs_clear_harvest_all(void);   /* wipe all harv_* (stale layout reference) */
 
 /* Measurement crash guard (spec §9). saved_settings is the raw settings frame
  * captured before altering balance current. */

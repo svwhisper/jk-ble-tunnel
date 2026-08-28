@@ -1,13 +1,19 @@
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "mqtt_task.h"
 #include "config.h"
 #include "queues.h"
 #include "state_cache.h"
 #include "arbiter.h"
+#include "ble_owner.h"
+#include "nvs_store.h"
 #include "mqtt_client.h"
 #include "cJSON.h"
 #include "esp_log.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_cli;
@@ -21,14 +27,80 @@ static void pub(const char *t, const char *payload, int retain)
     if (s_cli) esp_mqtt_client_publish(s_cli, t, payload, 0, 1, retain);
 }
 
+void mqtt_publish_scan(const char *json)   /* diagnostic, not retained */
+{
+    pub(CFG_MQTT_BASE "/bridge/scan", json, 0);
+}
+
+static void pub_hex(char *hex, size_t cap, uint8_t bms_id, const char *leaf,
+                    const uint8_t *data, uint16_t len)
+{
+    int o = 0;
+    for (int i = 0; i < len && o < (int)cap - 3; i++)
+        o += snprintf(hex + o, cap - o, "%02X", data[i]);
+    hex[o] = 0;
+    char t[40]; snprintf(t, sizeof(t), "%s/%u/%s", CFG_MQTT_BASE, bms_id, leaf);
+    pub(t, hex, 0);
+}
+
+/* Separate static buffers: raw runs on the NimBLE host task, appwrite on the
+ * tunnel task — they can fire concurrently, so they must not share a buffer. */
+void mqtt_publish_raw(uint8_t bms_id, const uint8_t *data, uint16_t len)
+{ static char hex[600]; pub_hex(hex, sizeof(hex), bms_id, "raw", data, len); }
+
+void mqtt_publish_appwrite(uint8_t bms_id, const uint8_t *data, uint16_t len)
+{ static char hex[600]; pub_hex(hex, sizeof(hex), bms_id, "appwrite", data, len); }
+
+/* Deferred reboot so the caller's MQTT publish/ack can flush first. */
+static void reboot_task(void *arg) { vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
+
 /* ---- inbound command routing -------------------------------------------- */
-/* topic form: jkbms/<id>/cmd/<what> */
+/* topic form: jkbms/<id>/cmd/<what>, plus system commands under jkbms/bridge/cmd/ */
 static void on_cmd(const char *t, int tlen, const char *data, int dlen)
 {
+    /* esp-mqtt topics are not NUL-terminated — copy before any string op. */
+    char topic[64] = {0};
+    int tl = tlen < (int)sizeof(topic) - 1 ? tlen : (int)sizeof(topic) - 1;
+    memcpy(topic, t, tl);
+
+    /* System (bridge-level) commands are not tied to a bms id. Require a
+     * non-empty payload so a zero-length retained-clear can't re-trigger them,
+     * and clear any retained copy before acting so a retained command can't
+     * boot-loop the node on every reconnect. */
+    if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/reboot")) {
+        if (dlen == 0) return;
+        pub(CFG_MQTT_BASE "/bridge/cmd/reboot", "", 1);   /* clear retained */
+        ESP_LOGW(TAG, "reboot requested via MQTT");
+        xTaskCreate(reboot_task, "mqtt_reboot", 2048, NULL, 5, NULL);
+        return;
+    }
+    if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/scan")) {
+        if (dlen == 0) return;
+        pub(CFG_MQTT_BASE "/bridge/cmd/scan", "", 1);      /* clear retained */
+        ESP_LOGW(TAG, "BLE scan dump requested via MQTT");
+        ble_owner_scan_dump();
+        return;
+    }
+    if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/rawcap")) {
+        if (dlen == 0) return;
+        pub(CFG_MQTT_BASE "/bridge/cmd/rawcap", "", 1);    /* clear retained */
+        char sec[8] = {0}; int sn = dlen < 7 ? dlen : 7; memcpy(sec, data, sn);
+        ble_owner_rawcap(atoi(sec));   /* payload = seconds (0 -> default 20) */
+        return;
+    }
+    if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/nvsclear")) {
+        if (dlen == 0) return;
+        pub(CFG_MQTT_BASE "/bridge/cmd/nvsclear", "", 1);  /* clear retained */
+        ESP_LOGW(TAG, "clearing harvest NVS + rebooting (re-harvest fresh)");
+        nvs_clear_harvest_all();
+        xTaskCreate(reboot_task, "nvs_reboot", 2048, NULL, 5, NULL);
+        return;
+    }
+
     /* parse the numeric id and the trailing command */
     unsigned id; char what[32] = {0};
     /* CFG_MQTT_BASE is "jkbms" */
-    if (sscanf(t, CFG_MQTT_BASE "/%u/cmd/%31s", &id, what) != 2) return;
+    if (sscanf(topic, CFG_MQTT_BASE "/%u/cmd/%31s", &id, what) != 2) return;
     if (id >= CFG_NUM_UNITS) return;
 
     char body[192] = {0}; int n = dlen < (int)sizeof(body) - 1 ? dlen : (int)sizeof(body) - 1;

@@ -53,13 +53,89 @@ Infrastructure PROVEN on real hardware + real LAN (Southerness):
   Test-board role isn't persisted; hold it advertising with scratchpad/hold_bms.py
   (keeps the serial open so it isn't reset).
 
+## DEPLOYED + O-1 COMPLETE (2026-08-28 afternoon)
+
+Node A is DEPLOYED in the garage next to the four real JK units
+(JK-PB2A16S20P, fw 19.31, 16S, 314 Ah EVE MB31). **Real decoded cell data is
+live on MQTT for banks 1/2/3** — cells, wire resistances, pack V/I, SOC, temps —
+verified against the .90 aggregator (current −0.133 A exact match).
+
+What it took (all remote after deploy, via OTA + the new MQTT ops commands):
+- Real advertised names ≠ spec guess: `BMS_0-00` / `BMS 1-01` / `BMS 2-02` /
+  `BMS_3-03` (mixed underscore/space; unit 0 is a different HW: Telink OUI).
+  CFG_BMS now carries the real names; CFG_NUM_UNITS=4.
+- **Unit 0 PARKED** (name=NULL in CFG_BMS): connects then flaps; revisit after
+  1-3 are settled. Owner will rename it (in the JK app) once settled.
+- Stale bench harvest in NVS poisoned the §O-9 layout check (`layout_mismatch`
+  for all real units) AND kept Node B advertising the bench name — fixed via
+  new `nvsclear` command (wipe harv_* + reboot, fresh harvest).
+- **Decode offsets PINNED from live captures** (jk_proto.c, BENCH-VERIFIED
+  comments): JK02_32S layout, cell mask @70 drives cell_count (16S), packV@150,
+  I@158, SOC@173, wire-warn@146, cycles u32@182, temps 144/162/164, settings
+  trigger@26 / bal-current@78 / balancer-enable@126, device strings 22/30/46.
+  `synth_frames.c` updated in lockstep; host test now includes a REAL captured
+  frame as a regression (26/26 pass; run per header comment in
+  tools/host_test_jk_proto.c).
+- **Cell-stream trigger (fw 19.31): 0x97 then 0x96, in that order, per
+  session.** Either alone yields 0x01/0x03 replies but never 0x02. Bootstrap
+  pair fires on every link-up (supervisor); round-robin 0x96 = keep-alive;
+  0x97 is nonce-filled (bytes 6..18) like the official app's.
+- MQTT ops commands (all under jkbms/bridge/cmd/, non-empty payload, retained-
+  cleared on receipt): `reboot`, `scan` (BLE scan dump -> bridge/scan),
+  `rawcap <sec>` (raw notify hex -> <id>/raw; app writes always logged to
+  <id>/appwrite), `nvsclear` (wipe harvest + reboot).
+- Data nugget: bank 3 cell 9 wire resistance 0.106 Ω vs ~0.07 peers — outlier;
+  relevant to the long-running cell-9 investigations.
+
 ## NEXT PHASE
-1. Get a REAL JK BMS on the bench; capture real cell-info/device-info/settings
-   frames; pin the `jk_proto.c` VERIFY offsets (O-1) so the real JK app parses.
-2. Then O-2/O-5: real balance-write frame + login; flip JK_ENABLE_WRITES; wire
-   the readback in arbiter handle_balance_set.
-3. Restore CFG_NUM_UNITS=JK_MAX_UNITS and fix multi-unit scan contention (don't
-   endlessly re-scan absent units; mark unreachable + long backoff early).
+1. Un-park unit 0 (restore "BMS_0-00" in CFG_BMS after owner renames it) and
+   fix its connect-flap (different HW: Telink OUI, name style).
+2. Phone/app UX through Node B: app connects to the clone but "doesn't
+   complete" loading — likely needs READ_CACHE priming from real snapshots
+   (spec §6 marker in tunnel_srv send_blueprint) and/or the C8 ack frames the
+   BMS emits. Investigate with rawcap + appwrite while an app session runs.
+3. O-2/O-5: real balance-write frame + login; flip JK_ENABLE_WRITES; wire the
+   readback in arbiter handle_balance_set.
+4. Raise CFG_WIFI_MAX_TX_QDBM on the garage supply if link ever looks marginal
+   (currently 34 = 8.5 dBm; OTA + rollback make this safe to try remotely).
+
+## Firmware OTA — push model, rollback-protected (added 2026-08-28)
+
+Reverses the spec's original "no OTA" non-goal: Node A lives in the garage, out
+of USB reach, so both nodes now self-update over WiFi.
+
+- **Push, not pull.** The host POSTs the `.bin`; the device receives it. Chosen
+  because the dev Mac isn't always up to *serve* a file (we hit exactly that in
+  the WiFi chase), so a device-initiated fetch is fragile. Push only needs the
+  Mac up while you're actively updating.
+- **Receiver:** `components/ota/` — an always-listening `esp_http_server` on
+  `CFG_OTA_PORT` **3765** (both nodes), `POST /ota`, body = raw app `.bin`
+  streamed straight into `esp_ota_write` (no full-image RAM buffer). Any failure
+  aborts the OTA handle; the running slot is untouched, so a dropped WiFi
+  transfer can't brick a node. No auth (LAN range = physical access).
+- **Rollback:** dual-slot OTA partition table (`ota_0`/`ota_1`, 1984 KB each on
+  the 4 MB flash) + `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. A pushed image boots
+  PENDING_VERIFY and is confirmed by `ota_mark_valid()` **only after WiFi is up**
+  (end of `app_main`). A build that crashes or can't join WiFi never confirms →
+  bootloader auto-reverts on next reset. Narrow downside: if the AP is down >20 s
+  at the exact moment of a fresh push, a good image also reverts (safe — lands on
+  the previous good image).
+- **Host tool:** `tools/ota_push.py a|b` — validates the `.bin` (0xE9 magic),
+  preflights DNS + port, pushes via `curl --fail-with-body`, then waits for the
+  node to drop and re-open :3765 to confirm the new image booted. `--host <ip>`
+  when pfSense DNS won't resolve the name from the Mac (common here).
+- **⚠️ One-time USB flash required before deploy.** The partition-table change
+  can't go over the air — the OTA-enabling image must be flashed over USB on the
+  bench *before Node A leaves for the garage*. After that, updates are OTA.
+- Both projects build clean on this layout (node_a 1.25 MB / 38 % slot free,
+  node_b 1.08 MB / 47 % free).
+- **HARDWARE-VALIDATED end-to-end 2026-08-28.** Both nodes USB-flashed with the
+  OTA-enabled image (IPs held: A 192.168.3.241, B 192.168.3.234; both listen on
+  :3765). A live `ota_push.py a` pushed 1.25 MB → Node A wrote it to **ota_1**,
+  rebooted, rejoined WiFi, confirmed the image (rollback cancelled), and reopened
+  :3765 in 7 s. Node A now runs from ota_1; next push ping-pongs to ota_0. Nodes
+  stable, no boot loop. From here on, updates are `tools/ota_push.py a|b`
+  (use `--host <ip>`; pfSense DNS won't resolve the node names from the Mac).
 
 ## Design decisions carried from the spec
 

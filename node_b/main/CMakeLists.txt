@@ -9,7 +9,7 @@ idf_component_register(
         "display.c"
     INCLUDE_DIRS "."
     REQUIRES
-        common secret net_util oled
+        common secret net_util oled ota
         nvs_flash esp_wifi esp_event esp_netif esp_timer esp_system
         bt lwip
 )
