@@ -47,6 +47,7 @@ typedef struct {
     int64_t   txn_deadline_us;
     uint8_t   want_record;    /* record we expect back for a POLL            */
     uint8_t   timeout_strikes;/* consecutive txn timeouts on this link       */
+    int64_t   renegotiate_at_us; /* central-initiated param update pending    */
 } link_t;
 
 static link_t s_links[CFG_LINK_POOL_SIZE];
@@ -56,6 +57,7 @@ static SemaphoreHandle_t s_mtx_link_pool;
  * The arbiter serialises per-BMS work, so this is rarely contended. */
 static link_t *s_connecting;
 static char    s_connect_name[32];
+static uint8_t s_connect_addr[6];
 static int gap_event(struct ble_gap_event *event, void *arg);
 static int scan_event(struct ble_gap_event *event, void *arg);
 static link_t *link_by_bms(uint8_t id);
@@ -207,6 +209,14 @@ static const char *name_for(uint8_t bms_id)
 {
     for (int i = 0; i < CFG_NUM_UNITS; i++)
         if (CFG_BMS[i].bms_id == bms_id) return CFG_BMS[i].name;
+    return NULL;
+}
+static const uint8_t *addr_for(uint8_t bms_id)
+{
+    static const uint8_t zeros[6] = {0};
+    for (int i = 0; i < CFG_NUM_UNITS; i++)
+        if (CFG_BMS[i].bms_id == bms_id)
+            return memcmp(CFG_BMS[i].addr, zeros, 6) ? CFG_BMS[i].addr : NULL;
     return NULL;
 }
 static link_t *link_by_conn(uint16_t ch)
@@ -373,6 +383,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     }
     case BLE_GAP_EVENT_DISCONNECT: {
         s_disc_events++;
+        /* reason 0x08=supervision timeout, 0x13=peer terminated, 0x16=us */
+        ESP_LOGW(TAG, "LL disconnect conn=%u reason=0x%02x",
+                 event->disconnect.conn.conn_handle,
+                 event->disconnect.reason);
         link_t *l = link_by_conn(event->disconnect.conn.conn_handle);
         if (l) {
             set_link_state(l->bms_id, LINK_REACHABLE_IDLE, false);
@@ -380,6 +394,38 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
             l->in_use = false;
         }
+        return 0;
+    }
+    case BLE_GAP_EVENT_CONN_UPDATE_REQ: {
+        /* LL-path request: counter-propose our envelope via self_params. */
+        struct ble_gap_upd_params *self = event->conn_update_req.self_params;
+        if (self) {
+            self->itvl_min = CFG_CONN_ITVL_MIN_MS * 4 / 5;
+            self->itvl_max = CFG_CONN_ITVL_MAX_MS * 4 / 5;
+            self->latency  = CFG_CONN_LATENCY;
+            self->supervision_timeout = CFG_CONN_SUPERVISION_MS / 10;
+        }
+        return 0;
+    }
+    case BLE_GAP_EVENT_L2CAP_UPDATE_REQ: {
+        /* Plan B (16:35): REJECTING the peer's param request makes the JK
+         * module hang up (constant chirping, disc climbing). So ACCEPT its
+         * 15-20 ms request — then, 2 s later, renegotiate from the central
+         * side with our latency envelope. A master-initiated LL connection
+         * update cannot be refused by the peripheral. */
+        /* Final policy (16:38): the module re-requests 16/0/600 forever and a
+         * renegotiation war chirps ~every 20 s. ACCEPT ITS PARAMS, FULL STOP —
+         * at 14:56 all three banks streamed for minutes at native params once
+         * the terminate policy, scan storms, and starvation were fixed. */
+        ESP_LOGI(TAG, "accepting peer params (no renegotiation)");
+        return 0;
+    }
+    case BLE_GAP_EVENT_CONN_UPDATE: {
+        struct ble_gap_conn_desc d;
+        if (ble_gap_conn_find(event->conn_update.conn_handle, &d) == 0)
+            ESP_LOGI(TAG, "conn params now: itvl=%u lat=%u sup=%u (status %d)",
+                     d.conn_itvl, d.conn_latency, d.supervision_timeout,
+                     event->conn_update.status);
         return 0;
     }
     case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -429,20 +475,12 @@ static int scan_event(struct ble_gap_event *event, void *arg)
     switch (event->type) {
     case BLE_GAP_EVENT_DISC: {
         if (!s_connecting) return 0;
-        struct ble_hs_adv_fields f;
-        if (ble_hs_adv_parse_fields(&f, event->disc.data, event->disc.length_data) != 0)
-            return 0;
-        if (!f.name_len) return 0;
-        char nm[32] = {0};
-        uint8_t n = f.name_len < 31 ? f.name_len : 31;
-        memcpy(nm, f.name, n);
-        if (strcmp(nm, s_connect_name) != 0) return 0;
-        /* Real JK BLE modules advertise with PUBLIC addresses; Node B's clones
-         * (which reuse the real names BY DESIGN, spec §5) use static-random.
-         * Without this filter, Node A in radio range of Node B connects to our
-         * own clone — a self-loop discovered 2026-08-28 when a desk 'soak'
-         * spent 9 minutes proudly holding a link to our own fake. */
+        /* PASSIVE scan + ADDRESS match: no SCAN_REQ traffic (scan-reqs CHIRP
+         * the units — parked bank 3 chirped during scans that never touched
+         * it), and public-address matching keeps the clone self-loop
+         * impossible (clones use static-random addresses). */
         if (event->disc.addr.type != BLE_ADDR_PUBLIC) return 0;
+        if (memcmp(event->disc.addr.val, s_connect_addr, 6) != 0) return 0;
         ble_gap_disc_cancel();
         ble_addr_t addr = event->disc.addr;
         link_t *l = s_connecting;
@@ -480,7 +518,8 @@ static int scan_event(struct ble_gap_event *event, void *arg)
 static void start_connect(link_t *l)
 {
     const char *name = name_for(l->bms_id);
-    if (!name || !s_ble_enabled || s_connecting || s_scan_active ||
+    const uint8_t *addr = addr_for(l->bms_id);
+    if (!name || !addr || !s_ble_enabled || s_connecting || s_scan_active ||
         net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
         /* No target, another connect in flight, a diagnostic scan owns the
          * radio, or WiFi is re-associating (shared radio — scanning now would
@@ -493,12 +532,17 @@ static void start_connect(link_t *l)
     ESP_LOGI(TAG, "scanning for bms %u ('%s')", l->bms_id, name);
     s_connecting = l;
     strlcpy(s_connect_name, name, sizeof(s_connect_name));
+    memcpy(s_connect_addr, addr, 6);
     /* DUTY-CYCLED scan: 30 ms window / 100 ms interval (~30%% radio), NOT the
      * NimBLE default continuous scan. The C3 shares one radio: continuous
      * connect-scans starved WiFi of even null-frame airtime ("wifi:m f null"
      * flood -> zombie association -> MQTT dead, 2026-08-28). JK units
      * advertise ~1/s, so a 5 s window at 30%% still catches them. */
-    struct ble_gap_disc_params dp = { .passive = 0, .itvl = 160, .window = 48 };
+    /* ACTIVE scan required: JK modules carry the device name in the SCAN
+     * RESPONSE, so passive scanning never matches (verified 16:31: 93 s of
+     * passive windows, zero connects). Chirp audio correlated with LL
+     * connect/disconnect events, not scan-reqs, so active costs nothing. */
+    struct ble_gap_disc_params dp = { .passive = 1, .itvl = 160, .window = 48 };
     if (ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 5000, &dp, scan_event, NULL) != 0) {
         s_connecting = NULL;
         l->txn_active = false;
@@ -584,16 +628,14 @@ static void sweep_timeouts(void)
         if (l->in_use && l->txn_active && now > l->txn_deadline_us) {
             l->txn_active = false;
             respond(l->bms_id, l->txn.cmd_id, RESP_TIMEOUT, NULL, 0, JK_REC_NONE);
-            /* Terminate only after repeated timeouts. A single lapsed poll is
-             * normal for a non-streaming unit (fw 19.31 emits its periodic
-             * 0x01/0x03 only every ~6 s) — killing a healthy link for it made
-             * every non-streaming unit connect-loop (bank 3, 2026-08-28). */
+            /* NEVER terminate a healthy LL link for slow data (audio-correlated
+             * 2026-08-28: chirps == LL connect/disconnect events, count-matched
+             * — the 3-strike terminate WAS the chirp machine). An unarmed link
+             * held silently costs one chirp ever; the supervisor re-arms it
+             * in place. The 8 s supervision timeout handles truly dead links. */
             l->timeout_strikes++;
-            ESP_LOGW(TAG, "bms %u txn timeout (strike %u)", l->bms_id, l->timeout_strikes);
-            if (l->timeout_strikes >= 3 && l->conn_handle) {
-                ESP_LOGW(TAG, "bms %u 3 strikes — terminating link (spec §11)", l->bms_id);
-                ble_gap_terminate(l->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-            }
+            ESP_LOGW(TAG, "bms %u txn timeout (strike %u, link held)",
+                     l->bms_id, l->timeout_strikes);
         }
     }
     xSemaphoreGive(s_mtx_link_pool);
@@ -686,6 +728,27 @@ static void ble_owner_task(void *arg)
 {
     for (;;) {
         if (s_scan_req && !s_scan_active) { s_scan_req = false; do_scan_dump(); }
+        {   /* central-initiated param renegotiation (see L2CAP_UPDATE_REQ) */
+            int64_t nowus = esp_timer_get_time();
+            xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+            for (int i = 0; i < CFG_LINK_POOL_SIZE; i++) {
+                link_t *l = &s_links[i];
+                if (l->in_use && l->conn_handle && l->renegotiate_at_us &&
+                    nowus > l->renegotiate_at_us) {
+                    l->renegotiate_at_us = 0;
+                    struct ble_gap_upd_params up = {
+                        .itvl_min = CFG_CONN_ITVL_MIN_MS * 4 / 5,
+                        .itvl_max = CFG_CONN_ITVL_MAX_MS * 4 / 5,
+                        .latency  = CFG_CONN_LATENCY,
+                        .supervision_timeout = CFG_CONN_SUPERVISION_MS / 10,
+                        .min_ce_len = 0, .max_ce_len = 0,
+                    };
+                    int rc = ble_gap_update_params(l->conn_handle, &up);
+                    ESP_LOGI(TAG, "bms %u central param update rc=%d", l->bms_id, rc);
+                }
+            }
+            xSemaphoreGive(s_mtx_link_pool);
+        }
         if (s_gd_req >= 0 && !s_gd.active) { int id = s_gd_req; s_gd_req = -1; do_gatt_dump(id); }
 
         bms_request_t req;

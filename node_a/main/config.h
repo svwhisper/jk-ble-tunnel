@@ -22,21 +22,23 @@
  * (in comments) are informational; selection is purely by name (spec §5).
  * If a unit won't connect, run the MQTT scan dump (jkbms/bridge/cmd/scan) to
  * see the exact bytes Node A observes and correct the string here. */
-typedef struct { const char *name; uint8_t bms_id; } cfg_bms_target_t;
+/* Selection is BY PUBLIC ADDRESS with PASSIVE scanning (2026-08-28 evening):
+ * JK names live only in the SCAN RESPONSE, and active scanning's SCAN_REQ
+ * packets CHIRP the units — proven when parked bank 3 chirped during scans
+ * that never connect to it. Addresses are the burned-in public addrs (from
+ * scan dumps + phone). NULL name OR zero addr = parked. addr bytes are
+ * little-endian as NimBLE presents them (reversed from display order). */
+typedef struct { const char *name; uint8_t bms_id; uint8_t addr[6]; } cfg_bms_target_t;
 static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
-    /* PARKED: unit 0 (BMS_0-00, A4:C1:38:00:86:05, Telink OUI) flaps — connects
-     * then drops. NULL name = name_for() returns NULL = never scanned/connected
-     * (inert, no radio time). Restore "BMS_0-00" once units 1-3 are decoding. */
-    { NULL,       0 },   /* A4:C1:38:00:86:05  — PARKED                         */
-    /* BENCH-INSTRUMENTED build: banks 1+2 are test targets, but BLE is OFF
-     * at boot (CFG_BLE_ON_AT_BOOT) — nothing connects until
-     * jkbms/bridge/cmd/ble "on" opens a controlled test window. */
-    { "BMS 1-01", 1 },   /* C8:47:80:3A:1A:D5  (SPACE, not underscore)          */
-    { "BMS 2-02", 2 },   /* C8:47:80:3A:2A:1F  (SPACE)                          */
-    /* PARKED 2026-08-28 15:20: bank 3 never re-arms its 0x02 stream and the
-     * resulting connect loop beeps the BMS relentlessly + churns the radio.
-     * Un-park after the arming failure is understood offline. */
-    { NULL,       3 },   /* C8:47:80:3A:58:CE  — PARKED (was "BMS_3-03")        */
+    { NULL,       0, {0} },                    /* BMS_0-00 A4:C1:38:00:86:05 PARKED */
+    /* ALL PARKED — session closed 2026-08-28 ~17:00. Key late finding: the
+     * JK BLE modules themselves WEDGE into autonomous constant beeping after
+     * heavy connect churn (bank 2 beeped constantly with our BLE fully off);
+     * a BMS power-cycle clears it. Next session: S3 as Node A + offline plan
+     * in SESSION_NOTES. */
+    { NULL,       1, {0} },                    /* BMS 1-01 C8:47:80:3A:1A:D5 */
+    { NULL,       2, {0} },                    /* BMS 2-02 parked for the solo test */
+    { NULL,       3, {0} },                    /* BMS_3-03 C8:47:80:3A:58:CE PARKED */
 };
 
 /* ---- Link pool / timing (spec §4) --------------------------------------- */
@@ -52,9 +54,14 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
  * ("stack cycling between BMSs", chirping units). JK streams ~3x128 B/s —
  * a 300 ms interval carries that with 10x less radio pressure, and an 8 s
  * supervision timeout rides out any realistic coex gap. */
-#define CFG_CONN_ITVL_MIN_MS     300     /* central connection interval range      */
-#define CFG_CONN_ITVL_MAX_MS     320
-#define CFG_CONN_LATENCY         1       /* peripheral may skip 1 event            */
+/* v2 (bench 2026-08-28): 300 ms starved the JK's tiny UART-BLE bridge buffer
+ * (data gaps -> poll strikes -> terminate -> chirp). The compromise BLE was
+ * built for: FAST interval + generous SLAVE LATENCY — the peripheral gets
+ * 30-40 ms service while it has data and skips up to 9 events when idle
+ * (~400 ms effective), so the radio budget stays coex-friendly. */
+#define CFG_CONN_ITVL_MIN_MS     30      /* central connection interval range      */
+#define CFG_CONN_ITVL_MAX_MS     40
+#define CFG_CONN_LATENCY         9       /* peripheral may skip 9 idle events      */
 #define CFG_CONN_SUPERVISION_MS  8000    /* controller drop threshold              */
 
 /* Bench instrumentation: BLE master switch. 0 = boot silent; enable with

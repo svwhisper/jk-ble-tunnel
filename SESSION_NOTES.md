@@ -106,6 +106,50 @@ Real-unit GATT (captured via gattdump, bank 3): GAP(2a00 rw!)/1801/FFE0
 OAD f000ffc0. The clone lacks DIS/battery/FFE2/GAP-name — near-certainly why
 the app pops "request device information failure". Mirror = next code task.
 
+## GARAGE CONSOLE SESSION (2026-08-28 16:00-17:00) — THE CHIRP INVESTIGATION
+
+Laptop + both nodes in the garage; USB consoles + mic-audio correlation +
+LL event counters. Findings, in discovery order:
+
+1. **Chirps == LL connect/disconnect events** (mic recording beep-detected and
+   count-matched against conn/disc counters).
+2. **The 3-strike terminate was a chirp machine** — policy now: NEVER
+   terminate a healthy LL link; unarmed links are held silently and re-armed
+   in place (supervisor re-sends 0x97 every 30 s, decoder sequences the 0x96).
+3. **JK modules demand 16/0/600 conn params via L2CAP.** Reject -> the module
+   HANGS UP (churn). Accept-then-renegotiate -> param war every ~20 s (it
+   re-requests forever). Final policy: ACCEPT its params outright.
+4. **JK names live only in the SCAN RESPONSE** -> passive scanning can't match
+   names; and active scanning's SCAN_REQs CHIRP the units (proven: parked
+   bank 3 chirped during scans that never connected to it). Fix: **PASSIVE
+   scan + match by burned-in PUBLIC ADDRESS** (CFG_BMS now carries addr;
+   public-only matching also makes the Node-B clone self-loop impossible —
+   earlier a desk 'soak' held a proud stable link to our own clone).
+5. **Supervision-timeout churn (LL reason 0x208) even at the module's own
+   params**, migrating between units — resolved by the biggest finding:
+6. **THE JK BLE MODULES THEMSELVES WEDGE under connect churn** and then beep
+   CONSTANTLY on their own — bank 2 beeped nonstop while our BLE was fully
+   OFF. A BMS power-cycle clears it (verified on banks 1 AND 2). Much of the
+   day's churn was probably modules in progressively degraded states.
+7. **Unresolved defect:** ~45 KB transient allocation spike drove heap floor
+   to **76 bytes** and crashed the node once; also a post-crash boot came up
+   with BLE mysteriously enabled (near-OOM state corruption?). Root cause
+   TBD; an S3 with PSRAM would absorb it regardless.
+
+**Owner decision: port Node A to the ESP32-S3** (Lonely Binary Gold Edition,
+currently the test board): dual-core kills the contention class, PSRAM kills
+the heap class. The codebase already builds for esp32s3.
+
+## NEXT SESSION PLAN
+0. Power-cycle ALL FOUR BMSs first (clean, unwedged modules) — then judge.
+1. Port node_a to esp32s3 (set-target, sdkconfig, partitions/OTA on 16 MB
+   flash + PSRAM; malloc-heavy paths can prefer PSRAM).
+2. With clean modules + all current policies (accept-params, never-terminate,
+   passive-addr scan, counters), re-soak: the system may simply be stable now.
+3. Chase the 45 KB allocation spike (heap tracing) if troughs persist.
+4. Then: re-enable banks stepwise, Node B GATT-mirror crash fix + phone test,
+   unit-0 unpark, O-2 writes.
+
 ## SUSPENDED 2026-08-28 ~15:40 — ALL UNITS PARKED, NODE A INSIDE
 
 The owner CONFIRMED by power-off test that Node A's BLE reconnect churn was

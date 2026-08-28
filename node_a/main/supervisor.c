@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
+#include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -133,6 +134,19 @@ static void maintenance_tick(void)
             s_last_link[id] = rt.link;
         }
 
+        /* Held link but stream never armed: re-send the 0x97 opener every 30 s
+         * WITHOUT touching the link (the decoder's sequenced 0x96 completes the
+         * pair when the 0x03 lands). No disconnects = no chirps. */
+        {
+            static int64_t s_rearm_us[CFG_NUM_UNITS];
+            bms_state_t bs;
+            if (rt.link_held && state_snapshot(id, &bs) && !bs.have_cells &&
+                now - s_rearm_us[id] > 30000000LL) {
+                s_rearm_us[id] = now;
+                arbiter_poll(id, JK_CMD_DEVICE_INFO);
+            }
+        }
+
         /* Reachability-probe floor for unreachable units (spec §4). */
         if (!ble_quiesce && cfg_name_for(id)[0] != '\0' &&
             rt.link == LINK_UNREACHABLE &&
@@ -160,6 +174,27 @@ static void maintenance_tick(void)
                 s_pub_tick[id] = 0;
                 mqtt_publish_link(id);
             }
+        }
+    }
+
+    /* WiFi-zombie breaker: a dead association with no disconnect event keeps
+     * net_wifi_up() true forever, so the quiesce never arms and BLE starves
+     * the reassociation (observed 16:24: MQTT died, scans kept running). If
+     * MQTT has been down >30 s while WiFi claims up, force a disconnect —
+     * that fires the event machinery, starts down_ms, arms the quiesce, and
+     * lets WiFi reassociate cleanly. At most once per minute. */
+    {
+        static int64_t s_zombie_kick_us;
+        static int64_t s_mqtt_down_since_us;
+        bool mqtt_up = (xEventGroupGetBits(g_evt) & EVT_MQTT_UP) != 0;
+        if (mqtt_up) s_mqtt_down_since_us = 0;
+        else if (!s_mqtt_down_since_us) s_mqtt_down_since_us = now;
+        if (!mqtt_up && net_wifi_up() && s_mqtt_down_since_us &&
+            now - s_mqtt_down_since_us > 30000000LL &&
+            now - s_zombie_kick_us > 60000000LL) {
+            s_zombie_kick_us = now;
+            ESP_LOGW(TAG, "MQTT down 30s with WiFi 'up' — kicking zombie association");
+            esp_wifi_disconnect();
         }
     }
 
