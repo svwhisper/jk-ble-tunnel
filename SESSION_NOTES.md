@@ -169,10 +169,12 @@ target-clean:
   unreachable, clones excluded by public-addr match → chirp-proof).
 
 ## NEXT SESSION PLAN
-0. Judge the overnight S3 scan soak (health: LL counters flat, heap ~8.4 MB,
-   no births). Then an attended garage session:
-1. Power-cycle all four BMSs (clean modules), place S3-A in the garage,
-   `ble on`, listen: expect one chirp per bank then silence; counters prove it.
+0. Overnight S3 soak PASSED: 15.1 h, heap floor unmoved by one byte, zero
+   LL events, zero reboots. Attended garage session:
+1. **NO BMS power-cycles — owner constraint (fuse pull next to open battery
+   terminals; hazardous; last resort only, owner's call).** Place S3-A in the
+   garage (~1 m+ from AP), `ble on`, listen: expect one chirp per bank then
+   silence; counters prove it. A misbehaving unit gets PARKED remotely.
 2. If stable: re-enable bank 3 + unit 0 stepwise (same counters), then the
    Node B GATT-mirror crash fix + phone test, then O-2 writes.
 3. If churn returns even on the S3 with clean modules: the remaining variable
