@@ -21,6 +21,16 @@ static int64_t s_meas_start_us;
 
 static void pub_bridge_alert(uint8_t id, const char *what);
 
+static tunnel_link_state_t s_last_link[CFG_NUM_UNITS];  /* change detection */
+
+/* The name Node A scans a unit by IS the name Node B clones (spec §5). */
+static const char *cfg_name_for(uint8_t id)
+{
+    for (int i = 0; i < CFG_NUM_UNITS; i++)
+        if (CFG_BMS[i].bms_id == id) return CFG_BMS[i].name;
+    return "";
+}
+
 /* ---- boot harvest coordinator (spec §4) -------------------------------- */
 /* Incremental: serve NVS immediately; harvest a unit the first time it is
  * reachable and verify its layout against the first stored table. Here we only
@@ -31,7 +41,14 @@ static void harvest_tick(void)
 {
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         harvest_entry_t h;
-        if (nvs_get_harvest(id, &h) && h.valid) continue;  /* already have it */
+        if (nvs_get_harvest(id, &h) && h.valid) {
+            if (h.name[0] == '\0') {   /* legacy/nameless entry — fix + re-announce */
+                strlcpy(h.name, cfg_name_for(id), sizeof(h.name));
+                nvs_put_harvest(id, &h);
+                tunnel_srv_announce();
+            }
+            continue;
+        }
         harvest_entry_t live;
         if (ble_owner_copy_table(id, &live)) {
             /* Layout identity check vs the first stored table (spec §5/§O-9). */
@@ -45,7 +62,11 @@ static void harvest_tick(void)
                 continue;
             }
             live.valid = true;
+            strlcpy(live.name, cfg_name_for(id), sizeof(live.name));
             nvs_put_harvest(id, &live);
+            /* Push TABLE+IDENT+LINK to Node B now so it can advertise this
+             * identity without waiting for a tunnel reconnect. */
+            tunnel_srv_announce();
         }
         /* If not yet harvested, do NOT poll here every tick — the round-robin
          * and the reachability probe (maintenance_tick) drive connects at a
@@ -75,6 +96,13 @@ static void maintenance_tick(void)
 
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         bms_runtime_t rt; state_get_runtime(id, &rt);
+
+        /* Push reachability changes to Node B so it starts/stops advertising
+         * this identity (spec §4/§5). */
+        if (rt.link != s_last_link[id]) {
+            tunnel_send_link(id, rt.link);
+            s_last_link[id] = rt.link;
+        }
 
         /* Reachability-probe floor for unreachable units (spec §4). */
         if (rt.link == LINK_UNREACHABLE &&
@@ -119,5 +147,6 @@ static void supervisor_task(void *arg)
 void supervisor_start(void)
 {
     memset(s_last_probe_us, 0, sizeof(s_last_probe_us));
+    memset(s_last_link, 0xFF, sizeof(s_last_link));  /* force first push */
     xTaskCreatePinnedToCore(supervisor_task, "supervisor", 6144, NULL, 3, NULL, tskNO_AFFINITY);
 }

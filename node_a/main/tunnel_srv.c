@@ -60,7 +60,9 @@ void tunnel_send_read_cache(uint8_t id, uint8_t idx, const uint8_t *d, uint16_t 
 }
 
 /* ---- resync: send blueprint + state (spec §6 TABLE_REQ handler) --------- */
-static void send_blueprint(void)
+/* Public so the supervisor can re-announce after a new harvest / state change,
+ * not just on Node B's TABLE_REQ. */
+void tunnel_srv_announce(void)
 {
     /* TABLE: shared blueprint (bms_id 0xFF). Take the first valid harvest. */
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
@@ -91,7 +93,7 @@ static void on_frame(uint8_t type, uint8_t bms_id, const uint8_t *pl, uint16_t l
 {
     switch (type) {
     case TUN_TABLE_REQ:
-        send_blueprint();
+        tunnel_srv_announce();
         break;
     case TUN_WRITE:                       /* [idx][withResponse][data] */
         if (len >= 2)
