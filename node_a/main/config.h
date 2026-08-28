@@ -44,7 +44,10 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
 
 /* ---- Link pool / timing (spec §4) --------------------------------------- */
 #define CFG_LINK_POOL_SIZE       4       /* hold ALL four banks (S3 + 6C era) */
-#define CFG_IDLE_DISCONNECT_MS   60000   /* free BMS client slot after app leaves */
+/* Effectively disabled: with a 4-slot pool holding every bank, freeing a
+ * slot after an app session just causes a pointless 0x216 disconnect +
+ * reconnect chirp (observed after every house app session, 2026-08-29). */
+#define CFG_IDLE_DISCONNECT_MS   86400000
 #define CFG_APP_LINK_TIMEOUT_MS  10000   /* app-write wait for link-up before fail */
 #define CFG_REACHABILITY_PROBE_S 60      /* supervisor probe floor for unreachable */
 #define CFG_RECONNECT_CAP_MS     30000   /* exponential backoff cap               */
