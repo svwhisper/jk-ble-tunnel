@@ -12,7 +12,7 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 # Concurrent central links: app-held unit + Node-RED round-robin (~3 budget).
-CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
 # 256, not 517: the JK BMS chunks notifies at 128 B and commands are 20 B; a
 # big preferred MTU just multiplies per-connection buffer usage (~13 KB/link
 # observed at 517 — three garage links ate ~40 KB of heap).
@@ -28,16 +28,25 @@ CONFIG_LWIP_TCP_NODELAY_DEFAULT=y
 # runs avahi) — DHCP/DNS hostnames still resolve normally too.
 CONFIG_LWIP_DNS_SUPPORT_MDNS_QUERIES=y
 
-# --- Console over native USB (USB-Serial-JTAG) ---
-# These C3 boards enumerate as usbmodem (native USB), not a UART bridge.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# --- Console on UART0 ---
+# S3 Gold Edition: the cabled port is the CH340 UART bridge, so console goes
+# to UART0 (the C3 boards used native USB-Serial-JTAG; revisit if ported back).
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 
 # --- Logs ---
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# --- Flash / OTA (push updater, rollback-protected; added 2026-08-28) ---
-# Boards are 4MB; dual-slot OTA layout is in partitions.csv. Rollback reverts a
-# freshly-pushed image that never confirms itself healthy (see components/ota).
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
-CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+# --- Flash / OTA (push updater, rollback-protected) ---
+# S3 Gold Edition: 16 MB flash; dual-slot OTA layout in partitions.csv.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# --- PSRAM (S3 Gold Edition: 8 MB embedded octal, AP_3v3) ---
+# Buries the C3-era heap crises (45 KB transient spikes vs 8 MB pool).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536

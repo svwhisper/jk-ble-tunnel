@@ -31,13 +31,10 @@
 typedef struct { const char *name; uint8_t bms_id; uint8_t addr[6]; } cfg_bms_target_t;
 static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
     { NULL,       0, {0} },                    /* BMS_0-00 A4:C1:38:00:86:05 PARKED */
-    /* ALL PARKED — session closed 2026-08-28 ~17:00. Key late finding: the
-     * JK BLE modules themselves WEDGE into autonomous constant beeping after
-     * heavy connect churn (bank 2 beeped constantly with our BLE fully off);
-     * a BMS power-cycle clears it. Next session: S3 as Node A + offline plan
-     * in SESSION_NOTES. */
-    { NULL,       1, {0} },                    /* BMS 1-01 C8:47:80:3A:1A:D5 */
-    { NULL,       2, {0} },                    /* BMS 2-02 parked for the solo test */
+    /* S3-era config: banks 1+2 target-ready; BLE is OFF at boot and stays
+     * off until an ATTENDED session commands jkbms/bridge/cmd/ble on. */
+    { "BMS 1-01", 1, {0xD5,0x1A,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:1A:D5 */
+    { "BMS 2-02", 2, {0x1F,0x2A,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:2A:1F */
     { NULL,       3, {0} },                    /* BMS_3-03 C8:47:80:3A:58:CE PARKED */
 };
 

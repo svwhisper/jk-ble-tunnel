@@ -145,15 +145,40 @@ LL event counters. Findings, in discovery order:
 currently the test board): dual-core kills the contention class, PSRAM kills
 the heap class. The codebase already builds for esp32s3.
 
+## S3 PORT — DONE (2026-08-28 evening, autonomous session)
+
+**Node A now runs on the ESP32-S3 Gold Edition** (16 MB flash, 8 MB octal
+PSRAM, dual core). Port took one config pass — the codebase was already
+target-clean:
+- `set-target esp32s3`; 16 MB dual-slot OTA layout (2x 3 MB slots);
+  SPIRAM=y OCT mode + SPIRAM_USE_MALLOC → **heap is now 8.4 MB** (the whole
+  C3 heap-crisis class — 45 KB spikes, 76-byte floors — is buried).
+- Console on UART0 (the cabled port is the CH340 bridge; the C3s used native
+  USB-Serial-JTAG). NIMBLE_MAX_CONNECTIONS=4.
+- **Old C3 Node A RETIRED**: otadata + both app headers blanked over USB —
+  bootloader halts; no hostname/MQTT/tunnel collision. (The C3 board is
+  reusable: reflash bootloader+table+app to revive.)
+- Validated: octal PSRAM init, WiFi, MQTT birth+health, **OTA round-trip by
+  hostname** (jk-node-a.localdomain → new lease .239), **A↔B tunnel up**
+  (Node B needed one reset to drop its cached DNS answer for the dead C3's
+  .241 — lwIP caches by TTL; remember this after any A re-addressing).
+- **Owner correction (important):** the desk-era "marginal indoor BMS
+  connections" NEVER existed — those were Node B clone self-loops. The
+  Faraday cage is absolute: the house cannot reach the BMSs, period.
+- Unattended scan-path soak left running (BLE on, banks 1+2 targeted but
+  unreachable, clones excluded by public-addr match → chirp-proof).
+
 ## NEXT SESSION PLAN
-0. Power-cycle ALL FOUR BMSs first (clean, unwedged modules) — then judge.
-1. Port node_a to esp32s3 (set-target, sdkconfig, partitions/OTA on 16 MB
-   flash + PSRAM; malloc-heavy paths can prefer PSRAM).
-2. With clean modules + all current policies (accept-params, never-terminate,
-   passive-addr scan, counters), re-soak: the system may simply be stable now.
-3. Chase the 45 KB allocation spike (heap tracing) if troughs persist.
-4. Then: re-enable banks stepwise, Node B GATT-mirror crash fix + phone test,
-   unit-0 unpark, O-2 writes.
+0. Judge the overnight S3 scan soak (health: LL counters flat, heap ~8.4 MB,
+   no births). Then an attended garage session:
+1. Power-cycle all four BMSs (clean modules), place S3-A in the garage,
+   `ble on`, listen: expect one chirp per bank then silence; counters prove it.
+2. If stable: re-enable bank 3 + unit 0 stepwise (same counters), then the
+   Node B GATT-mirror crash fix + phone test, then O-2 writes.
+3. If churn returns even on the S3 with clean modules: the remaining variable
+   set is small (module firmware behavior vs our hold-forever policy) — the
+   never-terminate policy means any churn is now module-initiated and the
+   0x208/0x213 reason codes will say so.
 
 ## SUSPENDED 2026-08-28 ~15:40 — ALL UNITS PARKED, NODE A INSIDE
 
