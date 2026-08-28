@@ -8,7 +8,8 @@
 #include "jk_ble_defs.h"
 #include "secret.h"          /* WIFI_*, NODE_A_HOST, NODE_A_PORT */
 
-#define CFG_NUM_UNITS            JK_MAX_UNITS   /* 4 identities */
+/* BENCH: 1 identity (match Node A). Production = JK_MAX_UNITS (4). */
+#define CFG_NUM_UNITS            1
 
 /* Advertising (spec §5): legacy-format connectable PDUs per set for app compat.
  * One app connection at a time; the other sets stay advertising. */

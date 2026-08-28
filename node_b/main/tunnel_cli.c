@@ -131,8 +131,12 @@ static void serve(int s)
     resync();
     int64_t last_ping = esp_timer_get_time(), last_rx = esp_timer_get_time();
 
+    /* Off-stack: this task also runs the NimBLE notify chain via on_frame ->
+     * ble_periph_forward_notify, so keep serve()'s own frame stays small. Safe
+     * as statics — only the single tunnel task touches them. */
+    static tun_out_t m;
+    static uint8_t   pl[TUNNEL_MAX_PAYLOAD];
     for (;;) {
-        tun_out_t m;
         while (xQueueReceive(s_out, &m, 0) == pdTRUE)
             if (send(s, m.buf, m.len, 0) < 0) goto drop;
 
@@ -142,7 +146,6 @@ static void serve(int s)
             uint8_t h[TUNNEL_HDR_LEN];
             if (!read_n(s, h, TUNNEL_HDR_LEN)) goto drop;
             uint16_t plen = h[2] | (h[3]<<8);
-            uint8_t pl[TUNNEL_MAX_PAYLOAD];
             if (plen > TUNNEL_MAX_PAYLOAD || (plen && !read_n(s, pl, plen))) goto drop;
             last_rx = esp_timer_get_time();
             on_frame(h[0], h[1], pl, plen);
@@ -191,5 +194,5 @@ static void tunnel_task(void *arg)
 void tunnel_cli_start(void)
 {
     s_out = xQueueCreate(16, sizeof(tun_out_t));
-    xTaskCreatePinnedToCore(tunnel_task, "tunnel_cli", 6144, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(tunnel_task, "tunnel_cli", 8192, NULL, 5, NULL, 0);
 }

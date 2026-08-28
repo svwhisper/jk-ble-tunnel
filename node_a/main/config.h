@@ -12,7 +12,9 @@
 #include "secret.h"          /* WIFI_SSID/PASS, MQTT_*, JK_LOGIN_PIN */
 
 /* ---- Topology / identity ------------------------------------------------ */
-#define CFG_NUM_UNITS            JK_MAX_UNITS   /* 4 */
+/* BENCH: 1 emulated BMS. Production = JK_MAX_UNITS (4). With phantom units the
+ * central wastes ~5 s/cycle scanning for absent BMSs, starving the real one. */
+#define CFG_NUM_UNITS            1
 
 /* Per-unit target: BLE name to match + a stable local bms_id (0..3).
  * Address may be left 0 to select purely by advertised name. VERIFY names
@@ -20,9 +22,7 @@
 typedef struct { const char *name; uint8_t bms_id; } cfg_bms_target_t;
 static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
     { "JK-B2A20S20P", 0 },
-    { "JK-B2A20S20P_2", 1 },
-    { "JK-B2A20S20P_3", 2 },
-    { "JK-B2A20S20P_4", 3 },
+    /* production: add _2/_3/_4 here and set CFG_NUM_UNITS = JK_MAX_UNITS */
 };
 
 /* ---- Link pool / timing (spec §4) --------------------------------------- */

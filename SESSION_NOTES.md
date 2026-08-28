@@ -32,12 +32,34 @@ Infrastructure PROVEN on real hardware + real LAN (Southerness):
   Broker (192.168.2.5) shows jkbms/0/state/{cells,summary,faults,link}, correct
   §9 r:null + cell-9 imbalance + reachability tri-state. (cells 17-32 junk with
   the 16-cell synth frame = placeholder-offset overlap, O-1.)
-- STILL not exercised: app <-> Node B path (phone or app-emulator board), real
-  JK decode offsets (O-1), and the gated write path (O-2/O-5).
+- **App <-> Node B path VALIDATED with a real phone (2026-08-28):** phone sees
+  the clone `JK-B2A20S20P`, connects, Node B resolves it to identity 0
+  (`app connected -> identity 0`, conns=1), and forwards notifications out to the
+  phone. Fix required: identity is resolved by the connection's **our_ota_addr**
+  (per-set random addr), not our_id_addr (ble_periph.c). The real JK **app**
+  connects but then errors ("request device information failure") + disconnects
+  because our emulator sends SYNTHETIC frames, not real JK protocol — the real
+  app needs a real BMS behind Node A (or real offsets, O-1/O-2). Pipe itself is
+  proven.
+- **BENCH = 1 unit** (CFG_NUM_UNITS=1 both nodes) because with 4 configured but
+  only 1 present, Node A wastes ~5 s/cycle scanning the 3 absent units, which
+  starved the real one (arbiter "pending full" flood) and flapped the A<->B
+  tunnel. Restore to JK_MAX_UNITS for production AND fix that scan-contention
+  robustness first (open item). node_b tunnel_cli stack 6144->8192 + serve()
+  buffers moved off-stack (was a stack-overflow crash when forwarding a NOTIFY
+  to a connected app).
 - Bench note: Mac is on the /23 (192.168.3.243) and reaches the broker by IP,
   but pfSense DNS (.2.1:53) doesn't answer the Mac — use the broker IP directly.
   Test-board role isn't persisted; hold it advertising with scratchpad/hold_bms.py
   (keeps the serial open so it isn't reset).
+
+## NEXT PHASE
+1. Get a REAL JK BMS on the bench; capture real cell-info/device-info/settings
+   frames; pin the `jk_proto.c` VERIFY offsets (O-1) so the real JK app parses.
+2. Then O-2/O-5: real balance-write frame + login; flip JK_ENABLE_WRITES; wire
+   the readback in arbiter handle_balance_set.
+3. Restore CFG_NUM_UNITS=JK_MAX_UNITS and fix multi-unit scan contention (don't
+   endlessly re-scan absent units; mark unreachable + long backoff early).
 
 ## Design decisions carried from the spec
 

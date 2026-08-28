@@ -78,6 +78,8 @@ static void configure(uint8_t id)
     ble_addr_t addr = { .type = BLE_ADDR_RANDOM };
     memcpy(addr.val, s_set[id].addr, 6);
     ble_gap_ext_adv_set_addr(id, &addr);
+    ESP_LOGI(TAG, "set[%u] addr %02x:%02x:%02x:%02x:%02x:%02x", id,
+             addr.val[5], addr.val[4], addr.val[3], addr.val[2], addr.val[1], addr.val[0]);
     set_adv_data(id);
     s_set[id].configured = true;
 }

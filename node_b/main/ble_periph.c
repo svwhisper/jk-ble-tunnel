@@ -30,9 +30,19 @@ static uint16_t s_val_handle;     /* 0xFFE1 value handle (idx 0) */
 static int identity_for_conn(uint16_t handle)
 {
     struct ble_gap_conn_desc desc;
-    if (ble_gap_conn_find(handle, &desc) != 0) return -1;     /* NIMBLE-PASS */
-    /* our_id_addr is the local (per-set random) address this conn landed on. */
-    return adv_mgr_identity_for_addr(desc.our_id_addr.val);
+    if (ble_gap_conn_find(handle, &desc) != 0) return -1;
+    /* The set's per-instance random address is the OTA (over-the-air) local
+     * address; our_id_addr may be the device identity address instead. */
+    int id = adv_mgr_identity_for_addr(desc.our_ota_addr.val);
+    if (id < 0) id = adv_mgr_identity_for_addr(desc.our_id_addr.val);
+    if (id < 0)
+        ESP_LOGW(TAG, "conn %u no identity: ota=%02x:%02x:%02x:%02x:%02x:%02x "
+                 "id=%02x:%02x:%02x:%02x:%02x:%02x", handle,
+                 desc.our_ota_addr.val[5], desc.our_ota_addr.val[4], desc.our_ota_addr.val[3],
+                 desc.our_ota_addr.val[2], desc.our_ota_addr.val[1], desc.our_ota_addr.val[0],
+                 desc.our_id_addr.val[5], desc.our_id_addr.val[4], desc.our_id_addr.val[3],
+                 desc.our_id_addr.val[2], desc.our_id_addr.val[1], desc.our_id_addr.val[0]);
+    return id;
 }
 
 /* ---- GATT access callback (synchronous, host task) --------------------- */
