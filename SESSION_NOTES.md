@@ -129,8 +129,12 @@ LL event counters. Findings, in discovery order:
    params**, migrating between units — resolved by the biggest finding:
 6. **THE JK BLE MODULES THEMSELVES WEDGE under connect churn** and then beep
    CONSTANTLY on their own — bank 2 beeped nonstop while our BLE was fully
-   OFF. A BMS power-cycle clears it (verified on banks 1 AND 2). Much of the
-   day's churn was probably modules in progressively degraded states.
+   OFF. **The wedge is TRANSIENT: bank 2 self-cleared after a few minutes of
+   radio quiet, with NO power-cycle** (owner correction). Bank 1 was
+   power-cycled and also cleared — sufficient but possibly unnecessary.
+   Operational guidance: stop all BLE activity and WAIT a few minutes first;
+   power-cycle only if beeping persists. Much of the day's churn was probably
+   modules in progressively degraded states.
 7. **Unresolved defect:** ~45 KB transient allocation spike drove heap floor
    to **76 bytes** and crashed the node once; also a post-crash boot came up
    with BLE mysteriously enabled (near-OOM state corruption?). Root cause
