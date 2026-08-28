@@ -106,18 +106,36 @@ Real-unit GATT (captured via gattdump, bank 3): GAP(2a00 rw!)/1801/FFE0
 OAD f000ffc0. The clone lacks DIS/battery/FFE2/GAP-name — near-certainly why
 the app pops "request device information failure". Mirror = next code task.
 
-## NEXT PHASE
-0. Redeploy Node A to the garage (NOT right next to the AP antenna; ~1 m+)
-   and confirm banks stream + stability via bridge/health.
-1. Node B GATT mirror: DIS 0x180A (fleet strings), Battery 0x180F (SOC from
-   cache), FFE2 (idx-1 write route on A too), per-identity GAP name on
-   connect. Then the phone test again.
-2. Un-park unit 0 (restore "BMS_0-00" in CFG_BMS after owner renames it) and
-   fix its connect-flap (different HW: Telink OUI, name style).
-3. O-2/O-5: real balance-write frame + login; flip JK_ENABLE_WRITES; wire the
-   readback in arbiter handle_balance_set.
-4. Raise CFG_WIFI_MAX_TX_QDBM on the garage supply if link ever looks marginal
-   (currently 34 = 8.5 dBm; OTA + rollback make this safe to try remotely).
+## SUSPENDED 2026-08-28 ~15:40 — ALL UNITS PARKED, NODE A INSIDE
+
+The owner CONFIRMED by power-off test that Node A's BLE reconnect churn was
+chirping the BMS units continuously (drop/reconnect cycles FASTER than the
+1 Hz link sampler — the link topics looked pinned while the chirps said
+otherwise; trust the ears). Cause unresolved: either connection-management
+firmware cycling links, or radio-level supervision drops (WiFi coex at hot
+RSSI vs weak BMS signals through metal racks) with chirping auto-reconnects.
+Node A now runs an ALL-PARKED image (CFG_BMS all NULL): WiFi/MQTT/OTA up,
+zero BLE, physically inside the house.
+
+## NEXT PHASE (bench-first — nothing runs against the batteries until proven)
+1. Instrumented build: cumulative BLE connect-event counter in
+   bridge/health (the number that can't lie), per-connect console log line,
+   and a LISTEN-ONLY mode (scan/observe, never connect) for chirp-free
+   diagnosis. Bench-verify on USB where marginal indoor range reproduces
+   churn visibly.
+2. Diagnose with it: the reconnect churn (chirps), the ~9 KB/min heap leak
+   correlated with connect churn (min_heap dipped to 3.4 K before the last
+   wedge), and the ~13 KB transient allocation spikes.
+3. Fix Node B's crash-on-phone-connect in the GATT mirror code (DIS/battery/
+   FFE2/GAP-name — commit ac98dda..819f51c era); B on USB gives the panic
+   backtrace on the next controlled phone connect (clones of parked units
+   won't advertise — un-park a bank on A briefly OR add a B-side test mode).
+4. Bank 3 stream-arming failure (0x97/0x96 sequencing wasn't sufficient).
+5. Un-park units incrementally, garage soak via bridge/health each step.
+6. Later: unit-0 flap, O-2/O-5 writes, TX-power tuning.
+
+Ops crib: push = tools/ota_push.py a|b --host <ip>; cmds = jkbms/bridge/cmd/
+{reboot,scan,rawcap,nvsclear,gattdump}; health/boot topics are the vitals.
 
 ## Firmware OTA — push model, rollback-protected (added 2026-08-28)
 

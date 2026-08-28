@@ -28,8 +28,13 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
      * then drops. NULL name = name_for() returns NULL = never scanned/connected
      * (inert, no radio time). Restore "BMS_0-00" once units 1-3 are decoding. */
     { NULL,       0 },   /* A4:C1:38:00:86:05  — PARKED                         */
-    { "BMS 1-01", 1 },   /* C8:47:80:3A:1A:D5  (SPACE, not underscore)          */
-    { "BMS 2-02", 2 },   /* C8:47:80:3A:2A:1F  (SPACE)                          */
+    /* ALL UNITS PARKED 2026-08-28 15:40: confirmed by power-off test that
+     * Node A's reconnect churn chirps the BMS units (drop/reconnect cycles
+     * faster than the 1 Hz link sampler). BLE-silent until the instrumented
+     * build (connect counter + listen-only mode) is bench-verified. Node
+     * stays on WiFi/MQTT/OTA for remote pushes. */
+    { NULL,       1 },   /* C8:47:80:3A:1A:D5  — PARKED (was "BMS 1-01")        */
+    { NULL,       2 },   /* C8:47:80:3A:2A:1F  — PARKED (was "BMS 2-02")        */
     /* PARKED 2026-08-28 15:20: bank 3 never re-arms its 0x02 stream and the
      * resulting connect loop beeps the BMS relentlessly + churns the radio.
      * Un-park after the arming failure is understood offline. */
