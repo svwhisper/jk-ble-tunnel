@@ -20,7 +20,7 @@
 static const char *TAG = "arbiter";
 
 /* ---- inbound message union --------------------------------------------- */
-typedef enum { ARB_REQ, ARB_APP_CONN, ARB_MQTT } arb_kind_t;
+typedef enum { ARB_REQ, ARB_APP_CONN, ARB_MQTT, ARB_CLEAR } arb_kind_t;
 typedef enum { MQTT_BALANCE, MQTT_MEASURE, MQTT_REFRESH } arb_mqtt_t;
 
 typedef struct {
@@ -312,6 +312,11 @@ void arbiter_set_app_connected(uint8_t id, bool connected)
     arb_msg_t m = { .kind = ARB_APP_CONN, .bms_id = id, .connected = connected };
     arb_in_send(&m);
 }
+void arbiter_clear_pending(uint8_t id)
+{
+    arb_msg_t m = { .kind = ARB_CLEAR, .bms_id = id };
+    arb_in_send(&m);
+}
 static void submit_mqtt(uint8_t id, arb_mqtt_t t, const char *json, const char *cid)
 {
     arb_msg_t m = { .kind = ARB_MQTT, .bms_id = id };
@@ -345,6 +350,15 @@ static void arbiter_task(void *arg)
                 case ARB_APP_CONN:
                     on_app_conn(msg.bms_id, msg.connected);
                     break;
+                case ARB_CLEAR: {
+                    /* Link-up ring flush (supervisor): polls queued while the
+                     * unit was down are stale, and dispatching an old 0x96
+                     * before the bootstrap 0x97 breaks fw 19.31's strict
+                     * 97-then-96 stream-arming order. */
+                    pend_t *pc = &s_pend[msg.bms_id];
+                    pc->head = pc->tail = pc->count = 0;
+                    break;
+                }
                 case ARB_MQTT:
                     if (msg.mqtt.type == MQTT_BALANCE)
                         handle_balance_set(msg.bms_id, msg.mqtt.json, msg.mqtt.id);

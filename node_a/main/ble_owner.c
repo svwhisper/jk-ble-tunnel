@@ -45,6 +45,7 @@ typedef struct {
     bms_request_t txn;
     int64_t   txn_deadline_us;
     uint8_t   want_record;    /* record we expect back for a POLL            */
+    uint8_t   timeout_strikes;/* consecutive txn timeouts on this link       */
 } link_t;
 
 static link_t s_links[CFG_LINK_POOL_SIZE];
@@ -260,6 +261,8 @@ static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
     uint16_t flen;
     const uint8_t *frame = jk_reasm_push(&l->reasm, data, len, &flen);
     if (!frame) return;   /* need more chunks */
+
+    l->timeout_strikes = 0;   /* the unit is talking — clear the §11 strikes */
 
     /* Fan out the complete frame: to Node B's read cache and to the decoder. */
     notify_item_t it;
@@ -532,11 +535,18 @@ static void sweep_timeouts(void)
     for (int i = 0; i < CFG_LINK_POOL_SIZE; i++) {
         link_t *l = &s_links[i];
         if (l->in_use && l->txn_active && now > l->txn_deadline_us) {
-            ESP_LOGW(TAG, "bms %u txn timeout (spec §11 guard)", l->bms_id);
             l->txn_active = false;
             respond(l->bms_id, l->txn.cmd_id, RESP_TIMEOUT, NULL, 0, JK_REC_NONE);
-            /* Free the link so it can't be held indefinitely. */
-            if (l->conn_handle) ble_gap_terminate(l->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            /* Terminate only after repeated timeouts. A single lapsed poll is
+             * normal for a non-streaming unit (fw 19.31 emits its periodic
+             * 0x01/0x03 only every ~6 s) — killing a healthy link for it made
+             * every non-streaming unit connect-loop (bank 3, 2026-08-28). */
+            l->timeout_strikes++;
+            ESP_LOGW(TAG, "bms %u txn timeout (strike %u)", l->bms_id, l->timeout_strikes);
+            if (l->timeout_strikes >= 3 && l->conn_handle) {
+                ESP_LOGW(TAG, "bms %u 3 strikes — terminating link (spec §11)", l->bms_id);
+                ble_gap_terminate(l->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            }
         }
     }
     xSemaphoreGive(s_mtx_link_pool);

@@ -124,6 +124,8 @@ static void maintenance_tick(void)
              * (in this order) is what makes fw 19.31 start streaming 0x02
              * cell frames; see the round-robin note above. */
             if (rt.link == LINK_UP) {
+                arbiter_clear_pending(id);   /* flush stale polls first, so the
+                                              * 97->96 pair dispatches adjacent */
                 arbiter_poll(id, JK_CMD_DEVICE_INFO);
                 arbiter_poll(id, JK_CMD_CELL_INFO);
             }
