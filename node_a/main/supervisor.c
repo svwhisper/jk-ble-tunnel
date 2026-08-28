@@ -96,24 +96,12 @@ static void maintenance_tick(void)
     bool ble_quiesce = net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS ||
                        !ble_owner_ble_enabled();
 
-    /* Round-robin one reachable-idle unit per tick for fresh telemetry.
-     * BENCH 2026-08-28 (fw 19.31): the 0x02 cell-info stream only starts after
-     * the BMS has seen DEVICE_INFO (0x97) FOLLOWED BY CELL_INFO (0x96) on the
-     * session — the esphome-jk-bms bootstrap order. Either alone elicits
-     * 0x01/0x03 replies but never a 0x02 (both single-opcode variants were
-     * tried and failed). The bootstrap pair is sent on every link-up below;
-     * this round-robin 0x96 is the keep-alive. */
-    if (!ble_quiesce)
-        for (uint8_t k = 0; k < CFG_NUM_UNITS; k++) {
-            uint8_t id = (s_rr + k) % CFG_NUM_UNITS;
-            bms_runtime_t rt; state_get_runtime(id, &rt);
-            /* Skip units an app holds: the BMS streams on its own once
-             * bootstrapped, and our polls would inject C8 acks the app never
-             * requested into its (now transparent, TUN_RAW) stream. */
-            if (rt.app_connected) continue;
-            if (cfg_name_for(id)[0] == '\0') continue;   /* parked unit */
-            if (rt.link != LINK_UNREACHABLE) { arbiter_poll(id, JK_CMD_CELL_INFO); s_rr = id + 1; break; }
-        }
+    /* NO keep-alive polling. THE BMS BEEPS ON EVERY COMMAND IT RECEIVES
+     * (piezo command-ack — the day-long chirp mystery, confirmed by the
+     * esphome-jk-bms community + live ears 2026-08-29). Once armed, the 0x02
+     * stream flows on its own and IS the health signal; a streaming unit must
+     * hear NOTHING from us. Commands are sent only to arm/re-arm (below) and
+     * for app traffic. */
 
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         bms_runtime_t rt; state_get_runtime(id, &rt);
@@ -134,14 +122,35 @@ static void maintenance_tick(void)
             s_last_link[id] = rt.link;
         }
 
-        /* Held link but stream never armed: re-send the 0x97 opener every 30 s
-         * WITHOUT touching the link (the decoder's sequenced 0x96 completes the
-         * pair when the 0x03 lands). No disconnects = no chirps. */
-        {
+        /* CONNECT DRIVER: a unit that is enabled but not connected gets a
+         * pending poll every 20 s — dispatch sees the link down and runs the
+         * connect-on-demand path. Costs no beeps: arbiter_clear_pending at
+         * link-up flushes this pending before it can reach the BMS. (The old
+         * round-robin keep-alive doubled as this driver; when it was removed
+         * for beep silence, nothing initiated connections at all.) */
+        if (!ble_quiesce && cfg_name_for(id)[0] != '\0' && !rt.link_held) {
+            static int64_t s_conn_drive_us[CFG_NUM_UNITS];
+            if (now - s_conn_drive_us[id] > 20000000LL) {
+                s_conn_drive_us[id] = now;
+                arbiter_poll(id, JK_CMD_DEVICE_INFO);
+            }
+        }
+
+        /* Held link whose stream never armed OR went stale (>30 s since the
+         * last good frame): re-send the 0x97 opener every 30 s WITHOUT
+         * touching the link (the decoder's sequenced 0x96 completes the pair
+         * when the 0x03 lands). Cost: <=2 command-ack beeps per 30 s for a
+         * struggling unit, ZERO for a streaming one. */
+        if (!ble_quiesce) {
             static int64_t s_rearm_us[CFG_NUM_UNITS];
+            bool stale = rt.link_held &&
+                         (now - rt.last_seen_us) > 30000000LL;
             bms_state_t bs;
-            if (rt.link_held && state_snapshot(id, &bs) && !bs.have_cells &&
-                now - s_rearm_us[id] > 30000000LL) {
+            bool unarmed = rt.link_held && state_snapshot(id, &bs) && !bs.have_cells;
+            /* 10 min between re-arm attempts: each costs ~2 command-ack beeps
+             * at the unit, so a chronically unarmed bank (bank 3) stays
+             * near-silent ambient. Investigation uses bounded rawcap windows. */
+            if ((unarmed || stale) && now - s_rearm_us[id] > 600000000LL) {
                 s_rearm_us[id] = now;
                 arbiter_poll(id, JK_CMD_DEVICE_INFO);
             }
