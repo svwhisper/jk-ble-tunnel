@@ -13,6 +13,7 @@
 #include "ble_periph.h"
 #include "tunnel_cli.h"
 #include "supervisor.h"
+#include "display.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -54,6 +55,7 @@ void app_main(void)
 
     tunnel_cli_start();           /* connect to Node A, resync, grace window    */
     supervisor_start();
+    display_start();              /* onboard OLED: role + status                */
 
     ESP_LOGI(TAG, "Node B up");
 }

@@ -11,9 +11,10 @@ idf_component_register(
         "mqtt_task.c"
         "measure.c"
         "supervisor.c"
+        "display.c"
     INCLUDE_DIRS "."
     REQUIRES
-        common secret jk_proto net_util
+        common secret jk_proto net_util oled
         nvs_flash esp_wifi esp_event esp_netif esp_timer esp_system
         mqtt bt json lwip
 )

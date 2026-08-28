@@ -6,9 +6,10 @@ idf_component_register(
         "adv_mgr.c"
         "ble_periph.c"
         "supervisor.c"
+        "display.c"
     INCLUDE_DIRS "."
     REQUIRES
-        common secret net_util
+        common secret net_util oled
         nvs_flash esp_wifi esp_event esp_netif esp_timer esp_system
         bt lwip
 )

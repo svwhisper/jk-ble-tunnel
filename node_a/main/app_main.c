@@ -19,6 +19,7 @@
 #include "mqtt_task.h"
 #include "measure.h"
 #include "supervisor.h"
+#include "display.h"
 
 static const char *TAG = "node_a";
 
@@ -48,6 +49,7 @@ void app_main(void)
     mqtt_start();                  /* Node-RED path + LWT                    */
     tunnel_srv_start();            /* Node B tunnel                          */
     supervisor_start();            /* harvest, probes, idle-disc, meas guard */
+    display_start();               /* onboard OLED: role + status            */
 
     ESP_LOGI(TAG, "Node A up");
 }

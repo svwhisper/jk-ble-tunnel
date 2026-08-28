@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdio.h>
 #include "net_util.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
@@ -13,7 +14,15 @@ static const char *TAG = "net_util";
 static EventGroupHandle_t s_evt;
 static esp_netif_t *s_netif;
 static char s_hostname[33];
+static esp_ip4_addr_t s_ip;
 #define GOT_IP (1 << 0)
+
+bool net_wifi_up(void) { return s_ip.addr != 0; }
+void net_wifi_ip_str(char *buf, int n)
+{
+    if (s_ip.addr) snprintf(buf, n, IPSTR, IP2STR(&s_ip));
+    else           snprintf(buf, n, "-");
+}
 
 static void on_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -24,8 +33,11 @@ static void on_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
     else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
         ESP_LOGW(TAG, "disconnected (reason=%d), retrying", e ? e->reason : -1);
+        s_ip.addr = 0;
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *ip = (ip_event_got_ip_t *)data;
+        s_ip = ip->ip_info.ip;
         xEventGroupSetBits(s_evt, GOT_IP);
     }
 }

@@ -11,6 +11,8 @@
  * reachable by name; pass NULL to keep the default. */
 void net_wifi_start(const char *ssid, const char *pass, const char *hostname);
 bool net_wifi_wait(int timeout_ms);     /* block until IP or timeout */
+bool net_wifi_up(void);                 /* have an IP right now */
+void net_wifi_ip_str(char *buf, int n); /* "192.168.3.241" or "-" */
 void net_sntp_start(const char *server);
 
 /* Cap WiFi TX power (units of 0.25 dBm; e.g. 34 = 8.5 dBm). Call after
