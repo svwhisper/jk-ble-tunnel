@@ -30,17 +30,20 @@
  * little-endian as NimBLE presents them (reversed from display order). */
 typedef struct { const char *name; uint8_t bms_id; uint8_t addr[6]; } cfg_bms_target_t;
 static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
+    /* PARKED (again) 2026-08-29: the Telink module (different HW from the
+     * C8:47:80 trio) connects but never harvests/streams even with 0x6C and
+     * the relaxed layout check. Needs its own investigation — remote, via
+     * llevent + bounded rawcap. Production ships as a 3-bank fleet for now. */
     { NULL,       0, {0} },                    /* BMS_0-00 A4:C1:38:00:86:05 PARKED */
-    /* Bank 1 PARKED 2026-08-29: chronic connect-arm-drop cycle (~25 s) under
-     * every parameter regime; module-level flakiness. Deep-dive later —
-     * suggest owner someday tries the JK app directly on it for comparison. */
-    { NULL,       1, {0} },                    /* BMS 1-01 C8:47:80:3A:1A:D5 PARKED */
+    /* Un-parked 2026-08-29 for the 0x6C test: its "chronic flakiness"
+     * predates the stream-enable discovery and may vanish with it. */
+    { "BMS 1-01", 1, {0xD5,0x1A,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:1A:D5 */
     { "BMS 2-02", 2, {0x1F,0x2A,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:2A:1F */
     { "BMS_3-03", 3, {0xCE,0x58,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:58:CE */
 };
 
 /* ---- Link pool / timing (spec §4) --------------------------------------- */
-#define CFG_LINK_POOL_SIZE       3       /* concurrent central links (~3 budget) */
+#define CFG_LINK_POOL_SIZE       4       /* hold ALL four banks (S3 + 6C era) */
 #define CFG_IDLE_DISCONNECT_MS   60000   /* free BMS client slot after app leaves */
 #define CFG_APP_LINK_TIMEOUT_MS  10000   /* app-write wait for link-up before fail */
 #define CFG_REACHABILITY_PROBE_S 60      /* supervisor probe floor for unreachable */

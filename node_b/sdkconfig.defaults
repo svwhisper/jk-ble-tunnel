@@ -18,6 +18,11 @@ CONFIG_BT_NIMBLE_MAX_EXT_ADV_INSTANCES=4
 # One app connection at a time (spec §5); a couple of slots for clean handoff.
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+# 8 KB host-task stack: the default 4096 overflowed by ~130 B the moment a
+# phone connected to the clone (Guru: Stack protection fault in nimble_host,
+# 2026-08-29) — the GATT-mirror callbacks run on this task.
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192
+CONFIG_NIMBLE_TASK_STACK_SIZE=8192
 
 # --- FreeRTOS / watchdog ---
 CONFIG_ESP_TASK_WDT_INIT=n

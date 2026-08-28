@@ -60,9 +60,13 @@ static void harvest_tick(void)
                 if (nvs_get_harvest(j, &first) && first.valid) { have_ref = true; break; }
             if (have_ref && (first.char_count != live.char_count ||
                  memcmp(first.chars, live.chars, live.char_count * sizeof(live.chars[0])))) {
-                ESP_LOGE(TAG, "bms %u layout MISMATCH — excluding identity", id);
-                pub_bridge_alert(id, "layout_mismatch");
-                continue;
+                /* Warn-and-ACCEPT (was exclude): Node B's clone table has been
+                 * STATIC since the GATT mirror landed, so per-unit property
+                 * differences are harmless — and unit 0's Telink module was
+                 * being excluded every second for exactly this (2026-08-29).
+                 * The phone app works identically on all four units. */
+                ESP_LOGW(TAG, "bms %u layout differs from ref — accepting anyway", id);
+                pub_bridge_alert(id, "layout_differs_accepted");
             }
             live.valid = true;
             strlcpy(live.name, cfg_name_for(id), sizeof(live.name));
@@ -115,9 +119,19 @@ static void maintenance_tick(void)
              * cell frames; see the round-robin note above. */
             if (rt.link == LINK_UP) {
                 arbiter_clear_pending(id);   /* flush stale polls first, so the
-                                              * 97->96 pair dispatches adjacent */
+                                              * bootstrap dispatches adjacent */
                 arbiter_poll(id, JK_CMD_DEVICE_INFO);
                 arbiter_poll(id, JK_CMD_CELL_INFO);
+                /* 0x6C: the app's third bootstrap command (captured live
+                 * 2026-08-29 through the TUN_3 clone). The app sends 97, 96,
+                 * 6C once and then NOTHING — and the stream runs forever.
+                 * Without 6C a module streams ~25 s after the last 96 and
+                 * sleeps (bank 2's death cycle); bank 3 never armed at all
+                 * until the app's 6C. Replayed verbatim (checksum intact). */
+                static const uint8_t stream_en[20] = {
+                    0xAA,0x55,0x90,0xEB,0x6C,0x04,0xA5,0xD0,0x86,0x0C,
+                    0xBD,0x7B,0x74,0xBE,0xF7,0x38,0x11,0x9D,0xE6,0x1E };
+                arbiter_app_write(id, 0, false, stream_en, sizeof(stream_en));
             }
             s_last_link[id] = rt.link;
         }
@@ -223,6 +237,8 @@ static void supervisor_task(void *arg)
         esp_task_wdt_reset();
         harvest_tick();      /* idempotent: skips units already in NVS */
         maintenance_tick();
+        { static int ka; if (++ka >= 15) { ka = 0;
+              if (ble_owner_ble_enabled()) ble_owner_keepalive_read(); } }
         { static int hb; if (++hb >= 15) { hb = 0; mqtt_publish_health(); } }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }

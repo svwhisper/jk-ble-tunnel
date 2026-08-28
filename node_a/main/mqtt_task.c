@@ -64,6 +64,15 @@ void mqtt_publish_gatt(const char *json)   /* diagnostic, not retained */
     pub(CFG_MQTT_BASE "/bridge/gatt", json, 0);
 }
 
+void mqtt_publish_llevent(const char *kind, uint8_t bms_id, int reason)
+{
+    char j[96];
+    snprintf(j, sizeof(j), "{\"ev\":\"%s\",\"bms\":%u,\"reason\":\"0x%02x\",\"up\":%lld}",
+             kind, bms_id, (unsigned)reason,
+             (long long)(esp_timer_get_time()/1000000));
+    pub(CFG_MQTT_BASE "/bridge/llevent", j, 0);
+}
+
 static void pub_hex(char *hex, size_t cap, uint8_t bms_id, const char *leaf,
                     const uint8_t *data, uint16_t len)
 {

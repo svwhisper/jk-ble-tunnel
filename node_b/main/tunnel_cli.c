@@ -60,7 +60,13 @@ static void on_frame(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
     }
     case TUN_IDENT: {                         /* advertised name */
         char name[32] = {0}; uint16_t n = len < 31 ? len : 31;
-        memcpy(name, pl, n); nb_set_ident_name(id, name);
+        memcpy(name, pl, n);
+        /* Clones advertise TUN instead of BMS: in-garage the real unit and
+         * the clone are otherwise indistinguishable in a scan list (owner
+         * request 2026-08-29), and distinct names also foreclose the whole
+         * clone-confusion class (self-loops, wrong-target app sessions). */
+        if (strncmp(name, "BMS", 3) == 0) memcpy(name, "TUN", 3);
+        nb_set_ident_name(id, name);
         adv_mgr_set_name(id, name);
         break;
     }

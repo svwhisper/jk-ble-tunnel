@@ -192,6 +192,21 @@ static void do_gatt_dump(int bms_id)
     }
 }
 
+/* Beep-free keep-alive: GATT read on held links (see header). Response is
+ * discarded; the point is provable central liveness at the ATT layer. */
+static int ka_read_cb(uint16_t conn, const struct ble_gatt_error *err,
+                      struct ble_gatt_attr *attr, void *arg)
+{ (void)conn; (void)err; (void)attr; (void)arg; return 0; }
+void ble_owner_keepalive_read(void)
+{
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    for (int i = 0; i < CFG_LINK_POOL_SIZE; i++)
+        if (s_links[i].in_use && s_links[i].conn_handle && s_links[i].val_handle)
+            ble_gattc_read(s_links[i].conn_handle, s_links[i].val_handle,
+                           ka_read_cb, NULL);
+    xSemaphoreGive(s_mtx_link_pool);
+}
+
 /* ---- raw-frame capture (jkbms/bridge/cmd/rawcap) ------------------------ */
 /* While armed, publish every raw notify chunk to jkbms/<id>/raw as hex, so the
  * real JK frame layout can be captured remotely to pin decode offsets (O-1). */
@@ -367,6 +382,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_connecting = NULL;   /* scan/connect sequence resolved */
         if (event->connect.status == 0) {
             s_conn_events++;   /* the number that can't lie (each = one chirp) */
+            mqtt_publish_llevent("connect", l ? l->bms_id : 0xFF, 0);
             l->conn_handle = event->connect.conn_handle;
             /* Request larger MTU, then discover the JK service. */
             ble_gattc_exchange_mtu(l->conn_handle, NULL, NULL);        /* NIMBLE-PASS */
@@ -388,6 +404,8 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                  event->disconnect.conn.conn_handle,
                  event->disconnect.reason);
         link_t *l = link_by_conn(event->disconnect.conn.conn_handle);
+        mqtt_publish_llevent("disconnect", l ? l->bms_id : 0xFF,
+                             event->disconnect.reason);
         if (l) {
             set_link_state(l->bms_id, LINK_REACHABLE_IDLE, false);
             if (l->txn_active) { l->txn_active = false;
