@@ -26,9 +26,18 @@ Infrastructure PROVEN on real hardware + real LAN (Southerness):
 - Node A: MQTT broker connected (mqtt.localdomain resolves).
 - A<->B TCP tunnel established: Node B resolves jk-node-a.localdomain via
   pfSense DNS and connects to Node A's tunnel server (`tunnel up`, tunnel=1).
-- NOT yet exercised: the BLE paths (Node A<->BMS, app<->Node B) and the JK
-  decode (VERIFY offsets, O-1) — next step is the test-board BMS emulator, or
-  a real BMS + the phone.
+- **Node A <-> BMS central path VALIDATED** against the test-board BMS emulator:
+  scan-by-name -> connect -> discover 0xFFE0/0xFFE1 -> subscribe -> poll(0x96)
+  -> 300-byte frame (chunked notifies) -> jk_proto reassemble -> decode -> MQTT.
+  Broker (192.168.2.5) shows jkbms/0/state/{cells,summary,faults,link}, correct
+  §9 r:null + cell-9 imbalance + reachability tri-state. (cells 17-32 junk with
+  the 16-cell synth frame = placeholder-offset overlap, O-1.)
+- STILL not exercised: app <-> Node B path (phone or app-emulator board), real
+  JK decode offsets (O-1), and the gated write path (O-2/O-5).
+- Bench note: Mac is on the /23 (192.168.3.243) and reaches the broker by IP,
+  but pfSense DNS (.2.1:53) doesn't answer the Mac — use the broker IP directly.
+  Test-board role isn't persisted; hold it advertising with scratchpad/hold_bms.py
+  (keeps the serial open so it isn't reset).
 
 ## Design decisions carried from the spec
 
