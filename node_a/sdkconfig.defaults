@@ -13,7 +13,10 @@ CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 # Concurrent central links: app-held unit + Node-RED round-robin (~3 budget).
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
-CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+# 256, not 517: the JK BMS chunks notifies at 128 B and commands are 20 B; a
+# big preferred MTU just multiplies per-connection buffer usage (~13 KB/link
+# observed at 517 — three garage links ate ~40 KB of heap).
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=256
 
 # --- FreeRTOS / watchdog ---
 CONFIG_ESP_TASK_WDT_INIT=n            # we init TWDT ourselves with our tasks

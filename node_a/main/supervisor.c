@@ -109,6 +109,7 @@ static void maintenance_tick(void)
              * bootstrapped, and our polls would inject C8 acks the app never
              * requested into its (now transparent, TUN_RAW) stream. */
             if (rt.app_connected) continue;
+            if (cfg_name_for(id)[0] == '\0') continue;   /* parked unit */
             if (rt.link != LINK_UNREACHABLE) { arbiter_poll(id, JK_CMD_CELL_INFO); s_rr = id + 1; break; }
         }
 
@@ -130,7 +131,8 @@ static void maintenance_tick(void)
         }
 
         /* Reachability-probe floor for unreachable units (spec §4). */
-        if (!ble_quiesce && rt.link == LINK_UNREACHABLE &&
+        if (!ble_quiesce && cfg_name_for(id)[0] != '\0' &&
+            rt.link == LINK_UNREACHABLE &&
             now - s_last_probe_us[id] > CFG_REACHABILITY_PROBE_S * 1000000LL) {
             s_last_probe_us[id] = now;
             arbiter_poll(id, JK_CMD_DEVICE_INFO);
@@ -165,6 +167,7 @@ static void supervisor_task(void *arg)
         esp_task_wdt_reset();
         harvest_tick();      /* idempotent: skips units already in NVS */
         maintenance_tick();
+        { static int hb; if (++hb >= 15) { hb = 0; mqtt_publish_health(); } }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -173,5 +176,10 @@ void supervisor_start(void)
 {
     memset(s_last_probe_us, 0, sizeof(s_last_probe_us));
     memset(s_last_link, 0xFF, sizeof(s_last_link));  /* force first push */
-    xTaskCreatePinnedToCore(supervisor_task, "supervisor", 6144, NULL, 3, NULL, tskNO_AFFINITY);
+    /* Priority ABOVE the workers (ble_owner 7 / arbiter / decoder): the
+     * supervisor's tick is tiny and bounded, but it feeds the task WDT — at
+     * prio 3 it starved for 15 s whenever marginal-link churn + streaming
+     * saturated the single core (repeated task-WDT panics, 2026-08-28). At 8
+     * it always preempts, ticks in ms, and sleeps. */
+    xTaskCreatePinnedToCore(supervisor_task, "supervisor", 6144, NULL, 8, NULL, tskNO_AFFINITY);
 }

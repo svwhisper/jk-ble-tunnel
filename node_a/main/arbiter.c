@@ -42,6 +42,15 @@ typedef struct {
     uint16_t next_cmd_id;
     int64_t  link_wait_deadline_us; /* app-write link-up guard (0 = inactive) */
     int64_t  connect_after_us;  /* backoff: don't attempt a connect before this */
+    uint32_t backoff_ms;        /* current per-unit backoff, doubles on failure */
+    int64_t  dispatch_after_us; /* failure-path rate limit: after ANY failed
+                                 * response, gate the next dispatch briefly.
+                                 * Without this, polls queued during a unit's
+                                 * connect/discovery window fail instantly
+                                 * (no val_handle yet) and the arbiter<->
+                                 * ble_owner ping-pong runs at full speed,
+                                 * starving the prio-3 supervisor -> task WDT
+                                 * (garage/indoor crash loop, 2026-08-28). */
 } pend_t;
 
 #define CONNECT_BACKOFF_US (2 * 1000000LL)  /* per-unit retry gap after a failed
@@ -82,6 +91,8 @@ static bool rt_link_held(uint8_t id)
 /* ---- dispatch ----------------------------------------------------------- */
 static void dispatch(uint8_t id)
 {
+    pend_t *pgate = &s_pend[id];
+    if (esp_timer_get_time() < pgate->dispatch_after_us) return;  /* rate limit */
     pend_t *p = &s_pend[id];
     if (p->busy || !p->count) return;
 
@@ -92,6 +103,7 @@ static void dispatch(uint8_t id)
      * live unit require link_held. TXN_CONNECT brings the link up. */
     bool needs_link = (r->kind != TXN_CONNECT && r->kind != TXN_DISCONNECT);
     if (needs_link && !rt_link_held(id)) {
+        /* (dispatch_after_us is checked by the caller-side gate below) */
         /* Respect the post-failure backoff so we don't spin retrying a connect
          * that keeps failing instantly (e.g. while another unit holds the scan
          * slot). Leaves the request pending; a later tick retries. */
@@ -101,7 +113,9 @@ static void dispatch(uint8_t id)
          * its producers — incl. the watchdog-fed supervisor — block forever). */
         bms_request_t c = { .bms_id = id, .kind = TXN_CONNECT,
                             .source = SRC_INTERNAL, .response_needed = true,
-                            .timeout_ms = 4000, .cmd_id = ++p->next_cmd_id };
+                            /* > the 5 s scan window + discovery, else the §11
+                             * sweep kills connects that are still scanning */
+                            .timeout_ms = 9000, .cmd_id = ++p->next_cmd_id };
         if (xQueueSend(g_q_bms_request, &c, pdMS_TO_TICKS(20)) == pdTRUE)
             p->busy = true;   /* retry next tick if the link queue was full */
         return;
@@ -194,14 +208,24 @@ static void on_response(const bms_response_t *rsp)
 
     switch (rsp->status) {
         case RESP_OK:
+            p->backoff_ms = 0;              /* healthy again: reset backoff */
             /* Connection just came up? flush pending. Decode handled elsewhere. */
             break;
         case RESP_TIMEOUT:
         case RESP_LINK_DOWN:
         case RESP_GATT_ERR:
             /* Arbiter timeout guard freed the link (spec §11). Back off before
-             * the next connect so a persistently-unreachable unit can't spin. */
-            p->connect_after_us = esp_timer_get_time() + CONNECT_BACKOFF_US;
+             * the next connect so a persistently-unreachable unit can't spin,
+             * and rate-limit ALL dispatch for this unit briefly so instant
+             * failures can't ping-pong at full speed (task-WDT guard).
+             * Backoff is EXPONENTIAL (2 s doubling to CFG_RECONNECT_CAP_MS):
+             * a marginal-range unit that fails every attempt must not keep
+             * the shared radio busy with a 5 s scan every 7 s forever. */
+            if (p->backoff_ms < 2000) p->backoff_ms = 2000;
+            else { p->backoff_ms *= 2;
+                   if (p->backoff_ms > CFG_RECONNECT_CAP_MS) p->backoff_ms = CFG_RECONNECT_CAP_MS; }
+            p->connect_after_us  = esp_timer_get_time() + (int64_t)p->backoff_ms * 1000;
+            p->dispatch_after_us = esp_timer_get_time() + 100000;  /* 100 ms */
             ESP_LOGW(TAG, "bms %u txn cmd=%u status=%d", id, rsp->cmd_id, rsp->status);
             break;
         default: break;
@@ -218,7 +242,7 @@ static void on_app_conn(uint8_t id, bool connected)
         /* Bring the real link up; start the link-up guard (spec §4). */
         p->link_wait_deadline_us = esp_timer_get_time() + CFG_APP_LINK_TIMEOUT_MS * 1000LL;
         bms_request_t c = { .bms_id = id, .kind = TXN_CONNECT, .source = SRC_APP,
-                            .response_needed = true, .timeout_ms = 4000 };
+                            .response_needed = true, .timeout_ms = 9000 };
         arbiter_submit(&c);
     } else {
         /* App left: post-session settings re-read (spec §4), then idle timer
@@ -342,6 +366,16 @@ static void arbiter_task(void *arg)
             on_response(&rsp);
         }
         check_link_guards();
+        /* Retry gated/pending work even when no message arrives (the select
+         * timeout above bounds this to every 500 ms). Cheap: dispatch() is a
+         * no-op for idle or gated units. Parked units (NULL name in CFG_BMS)
+         * are skipped entirely — a connect for them can only insta-fail. */
+        for (uint8_t i = 0; i < CFG_NUM_UNITS; i++) {
+            bool parked = true;
+            for (int k = 0; k < CFG_NUM_UNITS; k++)
+                if (CFG_BMS[k].bms_id == i && CFG_BMS[k].name) { parked = false; break; }
+            if (!parked) dispatch(i);
+        }
     }
 }
 

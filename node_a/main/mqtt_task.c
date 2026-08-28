@@ -12,6 +12,8 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
+#include "net_util.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -24,7 +26,24 @@ static void topic(char *out, size_t n, uint8_t id, const char *leaf)
 
 static void pub(const char *t, const char *payload, int retain)
 {
-    if (s_cli) esp_mqtt_client_publish(s_cli, t, payload, 0, 1, retain);
+    /* QoS by retention: retained state is low-rate and worth QoS 1; the
+     * high-rate telemetry (cells/summary/raw/...) is QoS 0 so a degraded WiFi
+     * link can NEVER balloon the esp-mqtt outbox into heap exhaustion —
+     * suspected garage kill mechanism 2026-08-28 (deaths began exactly when
+     * continuous cell streaming started publishing at QoS 1). */
+    if (s_cli) esp_mqtt_client_publish(s_cli, t, payload, 0, retain ? 1 : 0, retain);
+}
+
+void mqtt_publish_health(void)
+{
+    if (!s_cli) return;
+    char j[128];
+    snprintf(j, sizeof(j),
+             "{\"heap\":%u,\"min_heap\":%u,\"rssi\":%d,\"up\":%lld}",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)esp_get_minimum_free_heap_size(),
+             net_wifi_rssi(), (long long)(esp_timer_get_time()/1000000));
+    pub(CFG_MQTT_BASE "/bridge/health", j, 0);
 }
 
 void mqtt_publish_scan(const char *json)   /* diagnostic, not retained */
@@ -138,6 +157,12 @@ static void ev_handler(void *arg, esp_event_base_t base, int32_t ev, void *data)
         xEventGroupSetBits(g_evt, EVT_MQTT_UP);
         /* bridge/status online (retained), and subscribe to commands. */
         pub(CFG_MQTT_BRIDGE_STATUS, "{\"online\":true}", 1);
+        {   /* boot forensics: why did the last run end? (retained) */
+            char j[64];
+            snprintf(j, sizeof(j), "{\"reset_reason\":%d,\"heap\":%u}",
+                     (int)esp_reset_reason(), (unsigned)esp_get_free_heap_size());
+            pub(CFG_MQTT_BASE "/bridge/boot", j, 1);
+        }
         char sub[64]; snprintf(sub, sizeof(sub), "%s/+/cmd/#", CFG_MQTT_BASE);
         esp_mqtt_client_subscribe(s_cli, sub, 1);
         for (uint8_t i = 0; i < CFG_NUM_UNITS; i++) mqtt_publish_link(i);

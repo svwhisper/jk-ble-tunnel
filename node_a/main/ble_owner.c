@@ -450,7 +450,12 @@ static void start_connect(link_t *l)
     ESP_LOGI(TAG, "scanning for bms %u ('%s')", l->bms_id, name);
     s_connecting = l;
     strlcpy(s_connect_name, name, sizeof(s_connect_name));
-    struct ble_gap_disc_params dp = { .passive = 0 };
+    /* DUTY-CYCLED scan: 30 ms window / 100 ms interval (~30%% radio), NOT the
+     * NimBLE default continuous scan. The C3 shares one radio: continuous
+     * connect-scans starved WiFi of even null-frame airtime ("wifi:m f null"
+     * flood -> zombie association -> MQTT dead, 2026-08-28). JK units
+     * advertise ~1/s, so a 5 s window at 30%% still catches them. */
+    struct ble_gap_disc_params dp = { .passive = 0, .itvl = 160, .window = 48 };
     if (ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 5000, &dp, scan_event, NULL) != 0) {
         s_connecting = NULL;
         l->txn_active = false;
@@ -612,7 +617,7 @@ static void do_scan_dump(void)
     xSemaphoreGive(s_mtx_link_pool);
 
     ESP_LOGI(TAG, "scan dump: starting 8 s discovery");
-    struct ble_gap_disc_params dp = { .passive = 0 };
+    struct ble_gap_disc_params dp = { .passive = 0, .itvl = 160, .window = 48 };
     if (ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 8000, &dp, scan_dump_event, NULL) != 0) {
         ESP_LOGW(TAG, "scan dump: ble_gap_disc failed");
         s_scan_active = false;

@@ -112,6 +112,13 @@ bool net_wifi_wait(int timeout_ms)
                                pdMS_TO_TICKS(timeout_ms)) & GOT_IP;
 }
 
+int net_wifi_rssi(void)
+{
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return 0;
+    return ap.rssi;
+}
+
 void net_wifi_set_txpower(int8_t max_qdbm)
 {
     esp_wifi_set_max_tx_power(max_qdbm);

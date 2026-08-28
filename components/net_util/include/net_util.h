@@ -19,6 +19,7 @@ bool net_wifi_up(void);                 /* have an IP right now */
  * 2026-08-28: WiFi dropped mid-operation and the BLE connect loop kept the
  * radio so busy the 802.11 handshake never completed again). */
 int64_t net_wifi_down_ms(void);
+int net_wifi_rssi(void);               /* dBm to the AP; 0 = not associated */
 void net_wifi_ip_str(char *buf, int n); /* "192.168.3.241" or "-" */
 void net_sntp_start(const char *server);
 

@@ -18,7 +18,7 @@
 
 #define TUNNEL_PORT_DEFAULT      3760
 #define TUNNEL_BMS_ID_LINK       0xFF   /* link-level frames (PING, TABLE)      */
-#define TUNNEL_MAX_PAYLOAD       1024   /* generous; largest real frame is TABLE */
+#define TUNNEL_MAX_PAYLOAD       512    /* largest real payload = one 300 B frame + idx */
 #define TUNNEL_HDR_LEN           4
 
 /* Frame types. Values are wire-stable — never renumber, only append. */

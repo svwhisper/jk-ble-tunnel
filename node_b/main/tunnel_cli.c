@@ -195,6 +195,6 @@ static void tunnel_task(void *arg)
 
 void tunnel_cli_start(void)
 {
-    s_out = xQueueCreate(16, sizeof(tun_out_t));
+    s_out = xQueueCreate(8, sizeof(tun_out_t));  /* 8 x ~520 B (heap guard) */
     xTaskCreatePinnedToCore(tunnel_task, "tunnel_cli", 8192, NULL, 5, NULL, 0);
 }
