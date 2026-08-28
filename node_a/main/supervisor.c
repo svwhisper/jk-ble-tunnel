@@ -237,6 +237,15 @@ static void supervisor_task(void *arg)
         esp_task_wdt_reset();
         harvest_tick();      /* idempotent: skips units already in NVS */
         maintenance_tick();
+        {   /* auto-arm BLE after the post-boot OTA window (see config.h) */
+            static int aa; 
+            if (!ble_owner_ble_enabled() && !ble_owner_cmd_seen() &&
+                ++aa == CFG_BLE_AUTO_ARM_S) {
+                ESP_LOGW(TAG, "auto-arming BLE (no operator command in %d s)",
+                         CFG_BLE_AUTO_ARM_S);
+                ble_owner_set_ble(true);
+            }
+        }
         { static int ka; if (++ka >= 15) { ka = 0;
               if (ble_owner_ble_enabled()) ble_owner_keepalive_read(); } }
         { static int hb; if (++hb >= 15) { hb = 0; mqtt_publish_health(); } }

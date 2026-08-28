@@ -65,9 +65,13 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
 #define CFG_CONN_LATENCY         9       /* peripheral may skip 9 idle events      */
 #define CFG_CONN_SUPERVISION_MS  8000    /* controller drop threshold              */
 
-/* Bench instrumentation: BLE master switch. 0 = boot silent; enable with
- * jkbms/bridge/cmd/ble "on" (off with "off", which drops held links). */
+/* BLE master switch: boots OFF, then AUTO-ARMS after CFG_BLE_AUTO_ARM_S
+ * seconds unless an operator sent an explicit cmd/ble first. The window
+ * guarantees an OTA can always slip in after a reboot even if BLE itself is
+ * causing trouble (owner design, 2026-08-29). cmd/ble on|off still works
+ * any time and suppresses the pending auto-arm. */
 #define CFG_BLE_ON_AT_BOOT       0
+#define CFG_BLE_AUTO_ARM_S       30
 #define CFG_POLL_PERIOD_MS       5000    /* internal round-robin poll cadence      */
 
 /* ---- Tunnel (spec §6) --------------------------------------------------- */

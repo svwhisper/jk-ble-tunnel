@@ -75,12 +75,15 @@ void ble_owner_scan_dump(void) { s_scan_req = true; }
 
 /* ---- BLE master switch + connect/disconnect counters -------------------- */
 static volatile bool s_ble_enabled = CFG_BLE_ON_AT_BOOT;
+static volatile bool s_ble_cmd_seen;      /* explicit operator command this boot */
 static volatile uint32_t s_conn_events, s_disc_events;
+bool ble_owner_cmd_seen(void) { return s_ble_cmd_seen; }
 bool ble_owner_ble_enabled(void) { return s_ble_enabled; }
 uint32_t ble_owner_conn_count(void) { return s_conn_events; }
 uint32_t ble_owner_disc_count(void) { return s_disc_events; }
 void ble_owner_set_ble(bool on)
 {
+    s_ble_cmd_seen = true;
     s_ble_enabled = on;
     ESP_LOGW(TAG, "BLE master switch: %s", on ? "ON" : "OFF");
     if (!on) {
