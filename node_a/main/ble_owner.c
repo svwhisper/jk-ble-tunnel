@@ -437,6 +437,12 @@ static int scan_event(struct ble_gap_event *event, void *arg)
         uint8_t n = f.name_len < 31 ? f.name_len : 31;
         memcpy(nm, f.name, n);
         if (strcmp(nm, s_connect_name) != 0) return 0;
+        /* Real JK BLE modules advertise with PUBLIC addresses; Node B's clones
+         * (which reuse the real names BY DESIGN, spec §5) use static-random.
+         * Without this filter, Node A in radio range of Node B connects to our
+         * own clone — a self-loop discovered 2026-08-28 when a desk 'soak'
+         * spent 9 minutes proudly holding a link to our own fake. */
+        if (event->disc.addr.type != BLE_ADDR_PUBLIC) return 0;
         ble_gap_disc_cancel();
         ble_addr_t addr = event->disc.addr;
         link_t *l = s_connecting;
