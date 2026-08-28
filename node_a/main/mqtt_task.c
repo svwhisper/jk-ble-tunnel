@@ -26,11 +26,15 @@ static void topic(char *out, size_t n, uint8_t id, const char *leaf)
 
 static void pub(const char *t, const char *payload, int retain)
 {
+    /* Hard gate on the connected bit: esp-mqtt happily ENQUEUES QoS-1
+     * publishes while the session is down (or zombied), ballooning the outbox
+     * into heap death — the suspected 15:05 garage wedge (ports dying one by
+     * one, ICMP last). Retained state is re-announced on MQTT_EVENT_CONNECTED,
+     * so dropping while down loses nothing durable. */
+    if (!(xEventGroupGetBits(g_evt) & EVT_MQTT_UP)) return;
     /* QoS by retention: retained state is low-rate and worth QoS 1; the
      * high-rate telemetry (cells/summary/raw/...) is QoS 0 so a degraded WiFi
-     * link can NEVER balloon the esp-mqtt outbox into heap exhaustion —
-     * suspected garage kill mechanism 2026-08-28 (deaths began exactly when
-     * continuous cell streaming started publishing at QoS 1). */
+     * link can never balloon the outbox. */
     if (s_cli) esp_mqtt_client_publish(s_cli, t, payload, 0, retain ? 1 : 0, retain);
 }
 

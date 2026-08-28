@@ -35,6 +35,7 @@ typedef struct {
     uint8_t   bms_id;
     uint16_t  conn_handle;
     uint16_t  val_handle;     /* 0xFFE1 value handle                          */
+    uint16_t  ffe2_handle;    /* 0xFFE2 value handle (0 if absent)            */
     uint16_t  cccd_handle;    /* 0xFFE1 CCCD                                  */
     jk_reasm_t reasm;
     harvest_entry_t table;    /* discovered blueprint                        */
@@ -291,6 +292,8 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
 {
     link_t *l = arg;
     if (err && err->status != 0 && err->status != BLE_HS_EDONE) return 0;
+    if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR2_UUID)
+        l->ffe2_handle = chr->val_handle;   /* idx-1 app writes route here */
     if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR_UUID) {
         l->val_handle  = chr->val_handle;
         l->cccd_handle = chr->val_handle + 1;   /* CCCD is typically val+1    */
@@ -504,8 +507,15 @@ static void exec_request(const bms_request_t *req)
         break;
     }
     case TXN_RAW_WRITE: {
-        /* App write relayed verbatim to 0xFFE1. Completion = ATT write ack
-         * (on_gatt_write_done), not a JK notification. */
+        /* App write relayed verbatim. idx 1 = the FFE2 write-no-rsp command
+         * characteristic (the clone mirrors it); everything else = FFE1.
+         * FFE1 completion = ATT write ack (on_gatt_write_done). */
+        if (req->idx == 1 && l->ffe2_handle) {
+            ble_gattc_write_no_rsp_flat(l->conn_handle, l->ffe2_handle,
+                                        req->payload, req->payload_len);    /* NIMBLE-PASS */
+            respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
+            break;
+        }
         l->txn_active = req->response_needed; l->txn = *req;
         l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
         ble_gattc_write_flat(l->conn_handle, l->val_handle, req->payload,

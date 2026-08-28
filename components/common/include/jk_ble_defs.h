@@ -14,6 +14,7 @@
 /* GATT identifiers (16-bit). */
 #define JK_SVC_UUID          0xFFE0
 #define JK_CHR_UUID          0xFFE1   /* notify + write, single characteristic */
+#define JK_CHR2_UUID         0xFFE2   /* write-no-rsp cmd char (real module has both) */
 
 /* Command opcodes written to 0xFFE1 (spec §8). */
 #define JK_CMD_CELL_INFO     0x96

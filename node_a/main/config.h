@@ -30,7 +30,10 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
     { NULL,       0 },   /* A4:C1:38:00:86:05  — PARKED                         */
     { "BMS 1-01", 1 },   /* C8:47:80:3A:1A:D5  (SPACE, not underscore)          */
     { "BMS 2-02", 2 },   /* C8:47:80:3A:2A:1F  (SPACE)                          */
-    { "BMS_3-03", 3 },   /* C8:47:80:3A:58:CE                                   */
+    /* PARKED 2026-08-28 15:20: bank 3 never re-arms its 0x02 stream and the
+     * resulting connect loop beeps the BMS relentlessly + churns the radio.
+     * Un-park after the arming failure is understood offline. */
+    { NULL,       3 },   /* C8:47:80:3A:58:CE  — PARKED (was "BMS_3-03")        */
 };
 
 /* ---- Link pool / timing (spec §4) --------------------------------------- */

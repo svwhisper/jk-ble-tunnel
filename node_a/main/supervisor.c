@@ -149,8 +149,17 @@ static void maintenance_tick(void)
             rt.app_left_us = 0; state_set_runtime(id, &rt);
         }
 
-        /* Publish link state (retained). */
-        mqtt_publish_link(id);
+        /* Publish link state (retained) on CHANGE plus a slow refresh — NOT
+         * every tick: 4 QoS-1 publishes/s was pure outbox fuel whenever the
+         * broker session degraded. (Reconnect re-announces all units.) */
+        {
+            static uint8_t s_pub_tick[CFG_NUM_UNITS];
+            bool changed = (rt.link != s_last_link[id]);
+            if (changed || ++s_pub_tick[id] >= 30) {
+                s_pub_tick[id] = 0;
+                mqtt_publish_link(id);
+            }
+        }
     }
 
     /* Measurement hard-timeout (spec §9). */

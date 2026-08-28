@@ -75,15 +75,137 @@ static int chr_access(uint16_t conn, uint16_t attr,
     }
 }
 
+/* ---- mirrored standard services (spec §5 fidelity) ---------------------- */
+/* The real JK BLE module (gattdump 2026-08-28, bank 3) exposes GAP name, a
+ * full Device Information Service, a Battery Service and a second FFE2
+ * write-no-rsp characteristic. The official app's "device information" step
+ * READS the DIS — without it the app pops "request device information
+ * failure" no matter how good the FFE1 stream is. Mirror them. */
+#define UUID_DIS        0x180A
+#define UUID_BATT       0x180F
+#define CHR_MANUFACTURER 0x2A29
+#define CHR_MODEL        0x2A24
+#define CHR_SERIAL       0x2A25
+#define CHR_HW_REV       0x2A27
+#define CHR_FW_REV       0x2A26
+#define CHR_SW_REV       0x2A28
+#define CHR_SYSTEM_ID    0x2A23
+#define CHR_REG_CERT     0x2A2A
+#define CHR_PNP_ID       0x2A50
+#define CHR_BATT_LEVEL   0x2A19
+#define JK_CHR2_UUID     0xFFE2
+
+/* Fleet constants from the real units' 0x03 device-info frames. Serials are
+ * per-identity where captured; placeholders otherwise (presence of the read
+ * is what the app needs; values are display-only). */
+static const char *DIS_SERIAL[4] = {
+    "504185749000000",            /* unit 0 (parked) — placeholder            */
+    "504185749007323",            /* BMS 1-01 (captured)                      */
+    "504185749000000",            /* BMS 2-02 — placeholder                   */
+    "504185749007494",            /* BMS_3-03 (captured)                      */
+};
+
+static int dis_access(uint16_t conn, uint16_t attr,
+                      struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)attr; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
+    int id = identity_for_conn(conn);
+    uint16_t u = ble_uuid_u16(ctxt->chr->uuid);
+    const char *str = NULL;
+    switch (u) {
+    case CHR_MANUFACTURER: str = "JK-BMS";        break;
+    case CHR_MODEL:        str = "JK-PB2A16S20P"; break;
+    case CHR_SERIAL:       str = DIS_SERIAL[(id >= 0 && id < 4) ? id : 0]; break;
+    case CHR_HW_REV:       str = "19A";           break;
+    case CHR_FW_REV:       str = "19.31";         break;
+    case CHR_SW_REV:       str = "19.31";         break;
+    case CHR_SYSTEM_ID: {
+        static const uint8_t sysid[8] = {0};
+        return os_mbuf_append(ctxt->om, sysid, sizeof(sysid)) ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
+    }
+    case CHR_REG_CERT: {
+        static const uint8_t cert[4] = {0};
+        return os_mbuf_append(ctxt->om, cert, sizeof(cert)) ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
+    }
+    case CHR_PNP_ID: {
+        static const uint8_t pnp[7] = {0x01, 0, 0, 0, 0, 0, 0};
+        return os_mbuf_append(ctxt->om, pnp, sizeof(pnp)) ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
+    }
+    default: return BLE_ATT_ERR_UNLIKELY;
+    }
+    return os_mbuf_append(ctxt->om, (const uint8_t *)str, strlen(str))
+           ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
+}
+
+static int batt_access(uint16_t conn, uint16_t attr,
+                       struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)attr; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_READ_CHR) return BLE_ATT_ERR_UNLIKELY;
+    /* Serve the REAL SoC: the identity's cache holds the last complete FFE1
+     * frame; a 0x02 cell-info record carries SoC at offset 173. */
+    uint8_t soc = 100;
+    int id = identity_for_conn(conn);
+    if (id >= 0) {
+        nb_cache_t c; nb_get_cache((uint8_t)id, 0, &c);
+        if (c.len >= 174 && c.data[4] == 0x02) soc = c.data[173];
+    }
+    return os_mbuf_append(ctxt->om, &soc, 1) ? BLE_ATT_ERR_INSUFFICIENT_RES : 0;
+}
+
+/* FFE2: write-no-response command characteristic (mirrors the real module).
+ * Forwarded with idx=1 so Node A writes it to the real FFE2. */
+static int chr2_access(uint16_t conn, uint16_t attr,
+                       struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)attr; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
+    int id = identity_for_conn(conn);
+    if (id < 0) return BLE_ATT_ERR_UNLIKELY;
+    uint8_t buf[256];
+    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    if (len > sizeof(buf)) len = sizeof(buf);
+    ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL);
+    tunnel_cli_send_write((uint8_t)id, 1, false, buf, len);
+    return 0;
+}
+
 static const struct ble_gatt_svc_def s_svcs[] = {
     { .type = BLE_GATT_SVC_TYPE_PRIMARY,
       .uuid = BLE_UUID16_DECLARE(JK_SVC_UUID),
       .characteristics = (struct ble_gatt_chr_def[]) {
+          { .uuid = BLE_UUID16_DECLARE(JK_CHR2_UUID),   /* FFE2 first: matches
+                                                          * real module order */
+            .access_cb = chr2_access,
+            .flags = BLE_GATT_CHR_F_WRITE_NO_RSP },
           { .uuid = BLE_UUID16_DECLARE(JK_CHR_UUID),
             .access_cb = chr_access,
             .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE |
                      BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_NOTIFY,
             .val_handle = &s_val_handle },
+          { 0 }
+      } },
+    { .type = BLE_GATT_SVC_TYPE_PRIMARY,
+      .uuid = BLE_UUID16_DECLARE(UUID_DIS),
+      .characteristics = (struct ble_gatt_chr_def[]) {
+          { .uuid = BLE_UUID16_DECLARE(CHR_MANUFACTURER), .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_MODEL),        .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_SERIAL),       .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_HW_REV),       .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_FW_REV),       .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_SW_REV),       .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_SYSTEM_ID),    .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_REG_CERT),     .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { .uuid = BLE_UUID16_DECLARE(CHR_PNP_ID),       .access_cb = dis_access, .flags = BLE_GATT_CHR_F_READ },
+          { 0 }
+      } },
+    { .type = BLE_GATT_SVC_TYPE_PRIMARY,
+      .uuid = BLE_UUID16_DECLARE(UUID_BATT),
+      .characteristics = (struct ble_gatt_chr_def[]) {
+          { .uuid = BLE_UUID16_DECLARE(CHR_BATT_LEVEL),
+            .access_cb = batt_access,
+            .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY },
           { 0 }
       } },
     { 0 }
@@ -147,6 +269,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         }
         nb_set_conn(id, true, h);
         adv_mgr_on_connect(id);
+        /* GAP device name = this identity (the real module's 2a00 returns the
+         * unit's own name; apps cross-check it against the advertised name).
+         * Safe as a global because only one app connection is allowed. */
+        { nb_identity_t it; nb_get_identity(id, &it);
+          if (it.have_name) ble_svc_gap_device_name_set(it.name); }
         tunnel_cli_send_client(id, true);       /* drives A's connect-on-demand */
         ESP_LOGI(TAG, "app connected -> identity %u", id);
         return 0;
