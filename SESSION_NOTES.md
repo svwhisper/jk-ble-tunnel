@@ -87,13 +87,33 @@ What it took (all remote after deploy, via OTA + the new MQTT ops commands):
 - Data nugget: bank 3 cell 9 wire resistance 0.106 Ω vs ~0.07 peers — outlier;
   relevant to the long-running cell-9 investigations.
 
+## Stability crisis + resolution (2026-08-28 afternoon, commit 09bd959)
+
+Node A died minutes after every boot (garage AND indoors). Root-caused via
+USB console: task-WDT (reset_reason 6) — supervisor (the WDT feeder) was the
+LOWEST-priority task and starved whenever BLE churn + streaming loaded the
+single core. Full fix chain (all in 09bd959's message): supervisor prio 3->8;
+arbiter failure-path rate-limit + dispatch sweep + exponential backoff;
+connect timeout 9 s (> 5 s scan); **duty-cycled scans 30/100 ms** (continuous
+scans starved WiFi entirely — "wifi:m f null" flood = zombie association);
+MTU 256 (517 cost ~13 KB/link); tunnel payload/queue trims; QoS 0 telemetry.
+Soak: 4.5 min indoors at marginal BMS range, heap flat 42 KB, min 31.5 KB,
+zero resets. **Ops forensics now built in:** `jkbms/bridge/boot` (retained
+reset reason) + `jkbms/bridge/health` (heap/min/rssi/up, 15 s) + gattdump cmd.
+
+Real-unit GATT (captured via gattdump, bank 3): GAP(2a00 rw!)/1801/FFE0
+(**FFE2 write-no-rsp + FFE1**)/**DIS 0x180A (9 chars)**/**Battery 0x180F**/TI
+OAD f000ffc0. The clone lacks DIS/battery/FFE2/GAP-name — near-certainly why
+the app pops "request device information failure". Mirror = next code task.
+
 ## NEXT PHASE
-1. Un-park unit 0 (restore "BMS_0-00" in CFG_BMS after owner renames it) and
+0. Redeploy Node A to the garage (NOT right next to the AP antenna; ~1 m+)
+   and confirm banks stream + stability via bridge/health.
+1. Node B GATT mirror: DIS 0x180A (fleet strings), Battery 0x180F (SOC from
+   cache), FFE2 (idx-1 write route on A too), per-identity GAP name on
+   connect. Then the phone test again.
+2. Un-park unit 0 (restore "BMS_0-00" in CFG_BMS after owner renames it) and
    fix its connect-flap (different HW: Telink OUI, name style).
-2. Phone/app UX through Node B: app connects to the clone but "doesn't
-   complete" loading — likely needs READ_CACHE priming from real snapshots
-   (spec §6 marker in tunnel_srv send_blueprint) and/or the C8 ack frames the
-   BMS emits. Investigate with rawcap + appwrite while an app session runs.
 3. O-2/O-5: real balance-write frame + login; flip JK_ENABLE_WRITES; wire the
    readback in arbiter handle_balance_set.
 4. Raise CFG_WIFI_MAX_TX_QDBM on the garage supply if link ever looks marginal
