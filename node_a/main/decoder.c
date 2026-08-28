@@ -24,6 +24,10 @@ static void decoder_task(void *arg)
                 mqtt_publish_cells(it.bms_id);
                 mqtt_publish_summary(it.bms_id);
                 mqtt_publish_faults(it.bms_id);
+                ESP_LOGD(TAG, "bms %u: pack=%dmV I=%dmA soc=%d%% c1=%dmV "
+                         "c9=%dmV r3=%ld warn=0x%08lx", it.bms_id, (int)ci.pack_mv,
+                         (int)ci.current_ma, ci.soc_pct, ci.cells[0].mv, ci.cells[8].mv,
+                         (long)ci.cells[2].r_mohm, (unsigned long)ci.wire_warn_bitmask);
             }
             break;
         }

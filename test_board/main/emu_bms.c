@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+#include "freertos/queue.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -28,26 +29,41 @@ static uint16_t s_val_handle;
 static bool     s_notify;
 static uint32_t s_seq;
 static TimerHandle_t s_autopush;
+static QueueHandle_t s_push_q;   /* codes: 0=cell 1=settings 2=devinfo */
 
-/* Emit a frame as chunked notifications (~20-byte MTU-style chunks). */
+/* Emit a frame as chunked notifications. Runs ONLY on push_task — never
+ * re-entrantly from a GATT access callback or the FreeRTOS timer task, both of
+ * which overflow/corrupt and panic (StoreProhibited). */
 static void notify_frame(const uint8_t *frame, int len)
 {
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !s_notify) return;
     for (int off = 0; off < len; off += 20) {
         int n = (len - off < 20) ? (len - off) : 20;
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(frame + off, n);  /* NIMBLE-PASS */
-        if (om) ble_gatts_notify_custom(s_conn, s_val_handle, om);   /* NIMBLE-PASS */
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(frame + off, n);
+        if (om) ble_gatts_notify_custom(s_conn, s_val_handle, om);
     }
     ctl_emit("EVT notified %d bytes", len);
 }
 
+static void push_task(void *arg)
+{
+    uint8_t what;
+    for (;;) {
+        if (xQueueReceive(s_push_q, &what, portMAX_DELAY) != pdTRUE) continue;
+        uint8_t f[320]; int n = -1;
+        if (what == 0)      n = synth_cell_info(f, sizeof(f), s_seq++);
+        else if (what == 1) n = synth_settings(f, sizeof(f));
+        else if (what == 2) n = synth_device_info(f, sizeof(f), s_name);
+        if (n > 0) notify_frame(f, n);
+    }
+}
+
+/* Deferred: just enqueue a request; push_task does the actual notify. Safe to
+ * call from a GATT callback or a timer. */
 void emu_bms_push(const char *what)
 {
-    uint8_t f[320]; int n = -1;
-    if (!strcmp(what, "cell"))          n = synth_cell_info(f, sizeof(f), s_seq++);
-    else if (!strcmp(what, "settings")) n = synth_settings(f, sizeof(f));
-    else if (!strcmp(what, "devinfo"))  n = synth_device_info(f, sizeof(f), s_name);
-    if (n > 0) notify_frame(f, n);
+    uint8_t code = !strcmp(what, "settings") ? 1 : !strcmp(what, "devinfo") ? 2 : 0;
+    if (s_push_q) xQueueSend(s_push_q, &code, 0);
 }
 
 static void autopush_cb(TimerHandle_t t) { emu_bms_push("cell"); }
@@ -130,6 +146,8 @@ static void host_task(void *arg) { nimble_port_run(); nimble_port_freertos_deini
 void emu_bms_start(const char *adv_name)
 {
     if (adv_name) strlcpy(s_name, adv_name, sizeof(s_name));
+    s_push_q = xQueueCreate(8, sizeof(uint8_t));
+    xTaskCreate(push_task, "bms_push", 4096, NULL, 5, NULL);
     ESP_ERROR_CHECK(nimble_port_init());
     ble_hs_cfg.sync_cb = on_sync;
     ble_svc_gap_init();
