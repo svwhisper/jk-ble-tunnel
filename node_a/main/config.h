@@ -83,6 +83,11 @@ _Static_assert(CFG_MEAS_SETTLE_MS < CFG_MEAS_TIMEOUT_MS,
 #define CFG_MQTT_BRIDGE_STATUS   CFG_MQTT_BASE "/bridge/status"
 #define CFG_NTP_SERVER           "pool.ntp.org"
 
+/* BLE quiesce while WiFi re-associates (shared C3 radio): when WiFi has been
+ * down longer than this, stop initiating BLE scans/connects so the 802.11
+ * handshake can complete; BLE resumes once WiFi is back. */
+#define CFG_WIFI_QUIESCE_MS      10000
+
 /* WiFi TX power cap, units of 0.25 dBm (34 = 8.5 dBm). Needed on a marginal USB
  * supply: at full power the PA browns out on transmit and 802.11 auth fails
  * (reason 2). Raise toward 78 (~20 dBm) once on a solid supply / for range. */

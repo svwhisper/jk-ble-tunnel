@@ -1,6 +1,7 @@
 #include <string.h>
 #include "supervisor.h"
 #include "config.h"
+#include "net_util.h"
 #include "queues.h"
 #include "state_cache.h"
 #include "arbiter.h"
@@ -88,6 +89,11 @@ static void maintenance_tick(void)
 {
     int64_t now = esp_timer_get_time();
 
+    /* Quiesce ALL BLE initiation while WiFi is re-associating (shared radio;
+     * see net_wifi_down_ms). Links already up are left alone — scans are the
+     * radio hogs, and everything below only creates new radio work. */
+    bool ble_quiesce = net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS;
+
     /* Round-robin one reachable-idle unit per tick for fresh telemetry.
      * BENCH 2026-08-28 (fw 19.31): the 0x02 cell-info stream only starts after
      * the BMS has seen DEVICE_INFO (0x97) FOLLOWED BY CELL_INFO (0x96) on the
@@ -95,11 +101,16 @@ static void maintenance_tick(void)
      * 0x01/0x03 replies but never a 0x02 (both single-opcode variants were
      * tried and failed). The bootstrap pair is sent on every link-up below;
      * this round-robin 0x96 is the keep-alive. */
-    for (uint8_t k = 0; k < CFG_NUM_UNITS; k++) {
-        uint8_t id = (s_rr + k) % CFG_NUM_UNITS;
-        bms_runtime_t rt; state_get_runtime(id, &rt);
-        if (rt.link != LINK_UNREACHABLE) { arbiter_poll(id, JK_CMD_CELL_INFO); s_rr = id + 1; break; }
-    }
+    if (!ble_quiesce)
+        for (uint8_t k = 0; k < CFG_NUM_UNITS; k++) {
+            uint8_t id = (s_rr + k) % CFG_NUM_UNITS;
+            bms_runtime_t rt; state_get_runtime(id, &rt);
+            /* Skip units an app holds: the BMS streams on its own once
+             * bootstrapped, and our polls would inject C8 acks the app never
+             * requested into its (now transparent, TUN_RAW) stream. */
+            if (rt.app_connected) continue;
+            if (rt.link != LINK_UNREACHABLE) { arbiter_poll(id, JK_CMD_CELL_INFO); s_rr = id + 1; break; }
+        }
 
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         bms_runtime_t rt; state_get_runtime(id, &rt);
@@ -119,7 +130,7 @@ static void maintenance_tick(void)
         }
 
         /* Reachability-probe floor for unreachable units (spec §4). */
-        if (rt.link == LINK_UNREACHABLE &&
+        if (!ble_quiesce && rt.link == LINK_UNREACHABLE &&
             now - s_last_probe_us[id] > CFG_REACHABILITY_PROBE_S * 1000000LL) {
             s_last_probe_us[id] = now;
             arbiter_poll(id, JK_CMD_DEVICE_INFO);

@@ -155,7 +155,8 @@ static void serve_client(int c)
             uint8_t pl[1 + JK_FRAME_MAX]; pl[0] = it.idx;
             memcpy(pl + 1, it.data, it.len);
             uint8_t out[TUNNEL_HDR_LEN + 1 + JK_FRAME_MAX];
-            uint16_t n = frame(out, TUN_NOTIFY, it.bms_id, pl, it.len + 1);
+            uint16_t n = frame(out, it.raw ? TUN_RAW : TUN_NOTIFY,
+                               it.bms_id, pl, it.len + 1);
             if (send(c, out, n, 0) < 0) goto drop;
         }
         tun_out_t m;

@@ -67,11 +67,13 @@ static void on_frame(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
     case TUN_READ_CACHE:                      /* [idx][data] */
         if (len >= 1) nb_set_cache(id, pl[0], pl+1, len-1);
         break;
-    case TUN_NOTIFY:                          /* [idx][data] */
-        if (len >= 1) {
-            nb_set_cache(id, pl[0], pl+1, len-1);   /* keep cache fresh too */
-            ble_periph_forward_notify(id, pl[0], pl+1, len-1);
-        }
+    case TUN_NOTIFY:                          /* [idx][complete frame] */
+        /* Cache refresh ONLY. The app stream is TUN_RAW (verbatim chunks) —
+         * forwarding reassembled frames here too would duplicate the data. */
+        if (len >= 1) nb_set_cache(id, pl[0], pl+1, len-1);
+        break;
+    case TUN_RAW:                             /* [idx][verbatim BMS chunk] */
+        if (len >= 1) ble_periph_forward_notify(id, pl[0], pl+1, len-1);
         break;
     case TUN_WRITE_RESULT:                    /* [idx][status] */
         if (len >= 2) ble_periph_on_write_result(id, pl[0], pl[1]);

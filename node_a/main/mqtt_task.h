@@ -20,6 +20,7 @@ void mqtt_publish_meas(uint8_t bms_id, const char *json);  /* retained */
 void mqtt_publish_scan(const char *json);   /* jkbms/bridge/scan (diagnostic) */
 void mqtt_publish_raw(uint8_t bms_id, const uint8_t *data, uint16_t len); /* jkbms/<id>/raw hex */
 void mqtt_publish_appwrite(uint8_t bms_id, const uint8_t *data, uint16_t len); /* jkbms/<id>/appwrite hex */
+void mqtt_publish_gatt(const char *json);   /* jkbms/bridge/gatt (diagnostic) */
 
 /* Command ack (spec §7): jkbms/<id>/ack {cmd,id,status,detail,readback}. */
 void mqtt_ack(uint8_t bms_id, const char *cmd, const char *id,

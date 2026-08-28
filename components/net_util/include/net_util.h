@@ -6,12 +6,19 @@
 #define NET_UTIL_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* hostname is registered with the DHCP server (DHCP option 12) so the device is
  * reachable by name; pass NULL to keep the default. */
 void net_wifi_start(const char *ssid, const char *pass, const char *hostname);
 bool net_wifi_wait(int timeout_ms);     /* block until IP or timeout */
 bool net_wifi_up(void);                 /* have an IP right now */
+/* How long WiFi has been down, in ms (0 when up). The C3 shares ONE radio
+ * between WiFi and BLE: callers use this to quiesce BLE scanning while WiFi
+ * re-associates, or the two starve each other forever (garage death spiral,
+ * 2026-08-28: WiFi dropped mid-operation and the BLE connect loop kept the
+ * radio so busy the 802.11 handshake never completed again). */
+int64_t net_wifi_down_ms(void);
 void net_wifi_ip_str(char *buf, int n); /* "192.168.3.241" or "-" */
 void net_sntp_start(const char *server);
 

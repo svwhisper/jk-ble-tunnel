@@ -32,6 +32,11 @@ void mqtt_publish_scan(const char *json)   /* diagnostic, not retained */
     pub(CFG_MQTT_BASE "/bridge/scan", json, 0);
 }
 
+void mqtt_publish_gatt(const char *json)   /* diagnostic, not retained */
+{
+    pub(CFG_MQTT_BASE "/bridge/gatt", json, 0);
+}
+
 static void pub_hex(char *hex, size_t cap, uint8_t bms_id, const char *leaf,
                     const uint8_t *data, uint16_t len)
 {
@@ -86,6 +91,13 @@ static void on_cmd(const char *t, int tlen, const char *data, int dlen)
         pub(CFG_MQTT_BASE "/bridge/cmd/rawcap", "", 1);    /* clear retained */
         char sec[8] = {0}; int sn = dlen < 7 ? dlen : 7; memcpy(sec, data, sn);
         ble_owner_rawcap(atoi(sec));   /* payload = seconds (0 -> default 20) */
+        return;
+    }
+    if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/gattdump")) {
+        if (dlen == 0) return;
+        pub(CFG_MQTT_BASE "/bridge/cmd/gattdump", "", 1); /* clear retained */
+        char idb[8] = {0}; int in = dlen < 7 ? dlen : 7; memcpy(idb, data, in);
+        ble_owner_gattdump((uint8_t)atoi(idb));
         return;
     }
     if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/nvsclear")) {

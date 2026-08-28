@@ -33,6 +33,11 @@ typedef enum {
     TUN_CLIENT      = 0x08, /* B->A  [u8 connected] app connected/left identity  */
     TUN_TABLE_REQ   = 0x09, /* B->A  (no payload) send blueprint + state         */
     TUN_PING        = 0x0A, /* both  (no payload) keepalive, bms_id 0xFF         */
+    TUN_RAW         = 0x0B, /* A->B  [u8 idx][data] verbatim BMS notify chunk,
+                             * sent only while an app holds the identity; B
+                             * forwards it to the app untouched so the clone is
+                             * byte-transparent (C8 acks, AT noise, natural
+                             * chunking). TUN_NOTIFY stays cache-refresh only. */
 } tunnel_type_t;
 
 /* TUN_LINK state byte — the reachability tri-state (spec §4). */

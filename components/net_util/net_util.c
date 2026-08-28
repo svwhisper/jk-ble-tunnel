@@ -6,6 +6,7 @@
 #include "esp_netif.h"
 #include "esp_sntp.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -15,9 +16,16 @@ static EventGroupHandle_t s_evt;
 static esp_netif_t *s_netif;
 static char s_hostname[33];
 static esp_ip4_addr_t s_ip;
+static int64_t s_down_since_us;   /* 0 = up; set while associating/dropped */
 #define GOT_IP (1 << 0)
 
 bool net_wifi_up(void) { return s_ip.addr != 0; }
+int64_t net_wifi_down_ms(void)
+{
+    if (s_ip.addr) return 0;
+    if (!s_down_since_us) return 0;   /* not started yet */
+    return (esp_timer_get_time() - s_down_since_us) / 1000;
+}
 void net_wifi_ip_str(char *buf, int n)
 {
     if (s_ip.addr) snprintf(buf, n, IPSTR, IP2STR(&s_ip));
@@ -34,10 +42,12 @@ static void on_evt(void *arg, esp_event_base_t base, int32_t id, void *data)
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
         ESP_LOGW(TAG, "disconnected (reason=%d), retrying", e ? e->reason : -1);
         s_ip.addr = 0;
+        if (!s_down_since_us) s_down_since_us = esp_timer_get_time();
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *ip = (ip_event_got_ip_t *)data;
         s_ip = ip->ip_info.ip;
+        s_down_since_us = 0;
         xEventGroupSetBits(s_evt, GOT_IP);
     }
 }
@@ -91,6 +101,7 @@ void net_wifi_start(const char *ssid, const char *pass, const char *hostname)
     wc.sta.pmf_cfg.capable = true;   /* IDF default; PMF-optional WPA2 APs need it */
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    s_down_since_us = esp_timer_get_time();   /* down until first GOT_IP */
     ESP_ERROR_CHECK(esp_wifi_start());
     xTaskCreate(netstart_task, "netstart", 6144, NULL, 5, NULL);
 }

@@ -74,11 +74,15 @@ typedef struct {
 } bms_runtime_t;
 
 /* Fan-out notification item (ble_owner -> tunnel_srv and -> decoder).
- * Carries a complete, checksum-valid reassembled frame; B re-chunks to the
- * app MTU (spec §6). Copied into each consumer's queue — never shared. */
+ * raw=false: a complete, checksum-valid reassembled frame (decoder + Node B
+ * read-cache). raw=true: a verbatim BMS notify chunk, forwarded to a connected
+ * app byte-for-byte (TUN_RAW) so the clone is transparent — the real stream
+ * includes AT heartbeats and AA5590EB C8 command-acks the app waits for, which
+ * reassembly strips. Copied into each consumer's queue — never shared. */
 typedef struct {
     uint8_t  bms_id;
     uint8_t  idx;              /* characteristic index (JK: the 0xFFE1 slot) */
+    bool     raw;              /* verbatim chunk (TUN_RAW) vs complete frame */
     uint16_t len;
     uint8_t  data[JK_FRAME_MAX];
 } notify_item_t;

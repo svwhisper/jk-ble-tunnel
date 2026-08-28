@@ -9,11 +9,14 @@
  * connect/write side under mtx_link_pool. Snapshot copies cross the boundary.
  */
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include "ble_owner.h"
 #include "mqtt_task.h"
 #include "queues.h"
 #include "config.h"
 #include "state_cache.h"
+#include "net_util.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/semphr.h"
@@ -53,6 +56,7 @@ static link_t *s_connecting;
 static char    s_connect_name[32];
 static int gap_event(struct ble_gap_event *event, void *arg);
 static int scan_event(struct ble_gap_event *event, void *arg);
+static link_t *link_by_bms(uint8_t id);
 
 /* ---- diagnostic scan dump (jkbms/bridge/cmd/scan) ----------------------- */
 #define SCAN_DUMP_MAX 24
@@ -64,6 +68,105 @@ static volatile bool  s_scan_active;   /* a dump scan owns the radio            
 static int scan_dump_event(struct ble_gap_event *event, void *arg);
 
 void ble_owner_scan_dump(void) { s_scan_req = true; }
+
+/* ---- full GATT dump (jkbms/bridge/cmd/gattdump <id>) -------------------- */
+/* Walk the COMPLETE service/characteristic table of a connected unit and
+ * publish it to jkbms/bridge/gatt. The harvest only records the JK FFE0/FFE1
+ * pair, so the clone may lack services the official app checks (GAP name,
+ * Device Information Service, extra chars) — this shows what a real unit
+ * actually exposes so Node B can mirror it. */
+#define GD_MAX_SVCS 12
+typedef struct { struct ble_gatt_svc svcs[GD_MAX_SVCS]; int n, cur;
+                 uint16_t conn; uint8_t bms_id; bool active;
+                 char json[1792]; int jo; } gatt_dump_t;
+static gatt_dump_t s_gd;
+static volatile int s_gd_req = -1;      /* bms_id to dump, -1 = none */
+void ble_owner_gattdump(uint8_t bms_id) { s_gd_req = bms_id; }
+
+static void gd_append(const char *fmt, ...)
+{
+    int left = (int)sizeof(s_gd.json) - s_gd.jo - 1;
+    if (left <= 0) return;
+    va_list ap; va_start(ap, fmt);
+    int w = vsnprintf(s_gd.json + s_gd.jo, left, fmt, ap);
+    va_end(ap);
+    if (w > 0) s_gd.jo += (w < left) ? w : left;
+}
+
+static void gd_finish(void)
+{
+    gd_append("]}]}");
+    mqtt_publish_gatt(s_gd.json);
+    ESP_LOGI(TAG, "gattdump: published (%d svcs)", s_gd.n);
+    s_gd.active = false;
+}
+
+static int gd_chr_cb(uint16_t ch, const struct ble_gatt_error *err,
+                     const struct ble_gatt_chr *chr, void *arg);
+
+static void gd_next_svc(void)
+{
+    s_gd.cur++;
+    if (s_gd.cur >= s_gd.n) { gd_finish(); return; }
+    struct ble_gatt_svc *sv = &s_gd.svcs[s_gd.cur];
+    char u[BLE_UUID_STR_LEN];
+    ble_uuid_to_str(&sv->uuid.u, u);
+    gd_append("%s{\"svc\":\"%s\",\"chrs\":[", s_gd.cur ? "]}," : "", u);
+    if (ble_gattc_disc_all_chrs(s_gd.conn, sv->start_handle, sv->end_handle,
+                                gd_chr_cb, NULL) != 0)
+        gd_next_svc();   /* skip a service we can't walk */
+}
+
+static int gd_chr_cb(uint16_t ch, const struct ble_gatt_error *err,
+                     const struct ble_gatt_chr *chr, void *arg)
+{
+    (void)ch; (void)arg;
+    if (chr) {
+        char u[BLE_UUID_STR_LEN];
+        ble_uuid_to_str(&chr->uuid.u, u);
+        gd_append("%s{\"u\":\"%s\",\"p\":%d}",
+                  (s_gd.jo && s_gd.json[s_gd.jo - 1] == '}') ? "," : "",
+                  u, chr->properties);
+    }
+    if (err && err->status == BLE_HS_EDONE) gd_next_svc();
+    else if (err && err->status != 0) gd_next_svc();
+    return 0;
+}
+
+static int gd_svc_cb(uint16_t ch, const struct ble_gatt_error *err,
+                     const struct ble_gatt_svc *svc, void *arg)
+{
+    (void)ch; (void)arg;
+    if (svc && s_gd.n < GD_MAX_SVCS) s_gd.svcs[s_gd.n++] = *svc;
+    if (err && (err->status == BLE_HS_EDONE || err->status != 0)) {
+        if (err->status == BLE_HS_EDONE && s_gd.n) {
+            s_gd.cur = -1;
+            gd_next_svc();
+        } else if (err->status != BLE_HS_EDONE) {
+            ESP_LOGW(TAG, "gattdump: svc disc err %d", err->status);
+            s_gd.active = false;
+        }
+    }
+    return 0;
+}
+
+/* Runs on ble_owner_task. */
+static void do_gatt_dump(int bms_id)
+{
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    link_t *l = link_by_bms((uint8_t)bms_id);
+    uint16_t conn = (l && l->conn_handle) ? l->conn_handle : 0;
+    xSemaphoreGive(s_mtx_link_pool);
+    if (!conn) { ESP_LOGW(TAG, "gattdump: bms %d not connected", bms_id); return; }
+
+    memset(&s_gd, 0, sizeof(s_gd));
+    s_gd.conn = conn; s_gd.bms_id = (uint8_t)bms_id; s_gd.active = true;
+    gd_append("{\"id\":%d,\"svcs\":[", bms_id);
+    if (ble_gattc_disc_all_svcs(conn, gd_svc_cb, NULL) != 0) {
+        ESP_LOGW(TAG, "gattdump: disc_all_svcs busy/failed");
+        s_gd.active = false;
+    }
+}
 
 /* ---- raw-frame capture (jkbms/bridge/cmd/rawcap) ------------------------ */
 /* While armed, publish every raw notify chunk to jkbms/<id>/raw as hex, so the
@@ -142,13 +245,25 @@ static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
     if (esp_timer_get_time() < s_rawcap_until_us)
         mqtt_publish_raw(l->bms_id, data, len);
 
+    /* App transparency (spec §6): while an app holds this identity, forward
+     * the chunk VERBATIM (TUN_RAW) before reassembly, preserving wire order.
+     * The real stream carries AT heartbeats and AA5590EB C8 command-acks that
+     * reassembly strips — the official app stalls without them. */
+    bms_runtime_t apprt; state_get_runtime(l->bms_id, &apprt);
+    if (apprt.app_connected && len <= JK_FRAME_MAX) {
+        notify_item_t rw;
+        rw.bms_id = l->bms_id; rw.idx = 0; rw.raw = true; rw.len = len;
+        memcpy(rw.data, data, len);
+        xQueueSend(g_q_notify, &rw, 0);
+    }
+
     uint16_t flen;
     const uint8_t *frame = jk_reasm_push(&l->reasm, data, len, &flen);
     if (!frame) return;   /* need more chunks */
 
-    /* Fan out the complete frame: to the app (tunnel) and to the decoder. */
+    /* Fan out the complete frame: to Node B's read cache and to the decoder. */
     notify_item_t it;
-    it.bms_id = l->bms_id; it.idx = 0; it.len = flen;
+    it.bms_id = l->bms_id; it.idx = 0; it.raw = false; it.len = flen;
     memcpy(it.data, frame, flen);
     xQueueSend(g_q_notify, &it, 0);   /* drop-oldest semantics if full */
     xQueueSend(g_q_decode, &it, 0);
@@ -254,6 +369,30 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     }
 }
 
+/* GATT write completion for app/balance writes (host task). The ATT-layer ack
+ * IS the response for a write-with-response — JK's protocol-level reply (C8
+ * ack, records) arrives as notifications, which the transparent TUN_RAW path
+ * forwards to the app. Without this completion the txn could never finish:
+ * the §11 sweeper then terminated the BMS link at timeout_ms, and the repeated
+ * WRITE_RESULT timeouts tripped Node B's WRITE_FAIL_LIMIT, dropping the app
+ * ("cell info briefly, then blank", 2026-08-28). */
+static int on_gatt_write_done(uint16_t conn_handle, const struct ble_gatt_error *error,
+                              struct ble_gatt_attr *attr, void *arg)
+{
+    (void)attr; (void)arg;
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    link_t *l = link_by_conn(conn_handle);
+    if (l && l->txn_active &&
+        (l->txn.kind == TXN_RAW_WRITE || l->txn.kind == TXN_BALANCE_WRITE)) {
+        l->txn_active = false;
+        respond(l->bms_id, l->txn.cmd_id,
+                (error && error->status != 0) ? RESP_GATT_ERR : RESP_OK,
+                NULL, 0, JK_REC_NONE);
+    }
+    xSemaphoreGive(s_mtx_link_pool);
+    return 0;
+}
+
 /* ---- transaction execution (ble_owner_task) ---------------------------- */
 /* Scan callback: match the target BMS by advertised name, then connect to
  * whatever address it advertised (spec §5 — match on name, never MAC). */
@@ -298,9 +437,11 @@ static int scan_event(struct ble_gap_event *event, void *arg)
 static void start_connect(link_t *l)
 {
     const char *name = name_for(l->bms_id);
-    if (!name || s_connecting || s_scan_active) {
-        /* No target, another connect in flight, or a diagnostic scan owns the
-         * radio — fail the txn; the arbiter retries this unit next dispatch. */
+    if (!name || s_connecting || s_scan_active ||
+        net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
+        /* No target, another connect in flight, a diagnostic scan owns the
+         * radio, or WiFi is re-associating (shared radio — scanning now would
+         * starve the 802.11 handshake). Fail the txn; the arbiter retries. */
         l->txn_active = false;
         respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         l->in_use = false;
@@ -355,11 +496,12 @@ static void exec_request(const bms_request_t *req)
         break;
     }
     case TXN_RAW_WRITE: {
-        /* App write relayed verbatim to 0xFFE1. */
+        /* App write relayed verbatim to 0xFFE1. Completion = ATT write ack
+         * (on_gatt_write_done), not a JK notification. */
         l->txn_active = req->response_needed; l->txn = *req;
         l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
         ble_gattc_write_flat(l->conn_handle, l->val_handle, req->payload,
-                             req->payload_len, NULL, NULL);                 /* NIMBLE-PASS */
+                             req->payload_len, on_gatt_write_done, NULL);   /* NIMBLE-PASS */
         if (!req->response_needed)
             respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
         break;
@@ -370,7 +512,7 @@ static void exec_request(const bms_request_t *req)
         l->txn_active = true; l->txn = *req;
         l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
         ble_gattc_write_flat(l->conn_handle, l->val_handle, req->payload,
-                             req->payload_len, NULL, NULL);                 /* NIMBLE-PASS */
+                             req->payload_len, on_gatt_write_done, NULL);   /* NIMBLE-PASS */
         break;
     default: break;
     }
@@ -482,6 +624,7 @@ static void ble_owner_task(void *arg)
 {
     for (;;) {
         if (s_scan_req && !s_scan_active) { s_scan_req = false; do_scan_dump(); }
+        if (s_gd_req >= 0 && !s_gd.active) { int id = s_gd_req; s_gd_req = -1; do_gatt_dump(id); }
 
         bms_request_t req;
         if (xQueueReceive(g_q_bms_request, &req, pdMS_TO_TICKS(200)) == pdTRUE)

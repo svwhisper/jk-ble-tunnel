@@ -30,4 +30,9 @@ void ble_owner_scan_dump(void);
  * Used to capture real JK frames and pin the decode offsets (O-1). */
 void ble_owner_rawcap(int seconds);
 
+/* Walk a connected unit's FULL GATT table (all services/chars, not just the
+ * harvested JK pair) and publish it to jkbms/bridge/gatt. Triggered by
+ * jkbms/bridge/cmd/gattdump with the bms_id as payload. */
+void ble_owner_gattdump(uint8_t bms_id);
+
 #endif /* BLE_OWNER_H */
