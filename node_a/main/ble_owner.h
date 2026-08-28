@@ -35,4 +35,13 @@ void ble_owner_rawcap(int seconds);
  * jkbms/bridge/cmd/gattdump with the bms_id as payload. */
 void ble_owner_gattdump(uint8_t bms_id);
 
+/* BLE master switch (bench instrumentation): boots per CFG_BLE_ON_AT_BOOT;
+ * MQTT jkbms/bridge/cmd/ble "on"/"off". Off drops all held links. */
+void ble_owner_set_ble(bool on);
+bool ble_owner_ble_enabled(void);
+/* Cumulative LL connect/disconnect events since boot (each connect chirps a
+ * real unit; a healthy soak holds these flat after the initial connects). */
+uint32_t ble_owner_conn_count(void);
+uint32_t ble_owner_disc_count(void);
+
 #endif /* BLE_OWNER_H */

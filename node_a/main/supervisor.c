@@ -92,7 +92,8 @@ static void maintenance_tick(void)
     /* Quiesce ALL BLE initiation while WiFi is re-associating (shared radio;
      * see net_wifi_down_ms). Links already up are left alone — scans are the
      * radio hogs, and everything below only creates new radio work. */
-    bool ble_quiesce = net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS;
+    bool ble_quiesce = net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS ||
+                       !ble_owner_ble_enabled();
 
     /* Round-robin one reachable-idle unit per tick for fresh telemetry.
      * BENCH 2026-08-28 (fw 19.31): the 0x02 cell-info stream only starts after

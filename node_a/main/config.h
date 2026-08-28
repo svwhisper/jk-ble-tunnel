@@ -28,13 +28,11 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
      * then drops. NULL name = name_for() returns NULL = never scanned/connected
      * (inert, no radio time). Restore "BMS_0-00" once units 1-3 are decoding. */
     { NULL,       0 },   /* A4:C1:38:00:86:05  — PARKED                         */
-    /* ALL UNITS PARKED 2026-08-28 15:40: confirmed by power-off test that
-     * Node A's reconnect churn chirps the BMS units (drop/reconnect cycles
-     * faster than the 1 Hz link sampler). BLE-silent until the instrumented
-     * build (connect counter + listen-only mode) is bench-verified. Node
-     * stays on WiFi/MQTT/OTA for remote pushes. */
-    { NULL,       1 },   /* C8:47:80:3A:1A:D5  — PARKED (was "BMS 1-01")        */
-    { NULL,       2 },   /* C8:47:80:3A:2A:1F  — PARKED (was "BMS 2-02")        */
+    /* BENCH-INSTRUMENTED build: banks 1+2 are test targets, but BLE is OFF
+     * at boot (CFG_BLE_ON_AT_BOOT) — nothing connects until
+     * jkbms/bridge/cmd/ble "on" opens a controlled test window. */
+    { "BMS 1-01", 1 },   /* C8:47:80:3A:1A:D5  (SPACE, not underscore)          */
+    { "BMS 2-02", 2 },   /* C8:47:80:3A:2A:1F  (SPACE)                          */
     /* PARKED 2026-08-28 15:20: bank 3 never re-arms its 0x02 stream and the
      * resulting connect loop beeps the BMS relentlessly + churns the radio.
      * Un-park after the arming failure is understood offline. */
@@ -47,8 +45,21 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
 #define CFG_APP_LINK_TIMEOUT_MS  10000   /* app-write wait for link-up before fail */
 #define CFG_REACHABILITY_PROBE_S 60      /* supervisor probe floor for unreachable */
 #define CFG_RECONNECT_CAP_MS     30000   /* exponential backoff cap               */
-#define CFG_CONN_ITVL_MIN_MS     30      /* central connection interval range      */
-#define CFG_CONN_ITVL_MAX_MS     50
+/* Connection parameters — THE coex fix (2026-08-28 architecture review).
+ * NimBLE defaults (30 ms interval, 2.56 s supervision) demand the shared
+ * radio every ~10 ms across 3 links; WiFi bursts then starve a link past its
+ * tiny supervision timeout, the CONTROLLER drops it, and reconnects cascade
+ * ("stack cycling between BMSs", chirping units). JK streams ~3x128 B/s —
+ * a 300 ms interval carries that with 10x less radio pressure, and an 8 s
+ * supervision timeout rides out any realistic coex gap. */
+#define CFG_CONN_ITVL_MIN_MS     300     /* central connection interval range      */
+#define CFG_CONN_ITVL_MAX_MS     320
+#define CFG_CONN_LATENCY         1       /* peripheral may skip 1 event            */
+#define CFG_CONN_SUPERVISION_MS  8000    /* controller drop threshold              */
+
+/* Bench instrumentation: BLE master switch. 0 = boot silent; enable with
+ * jkbms/bridge/cmd/ble "on" (off with "off", which drops held links). */
+#define CFG_BLE_ON_AT_BOOT       0
 #define CFG_POLL_PERIOD_MS       5000    /* internal round-robin poll cadence      */
 
 /* ---- Tunnel (spec §6) --------------------------------------------------- */

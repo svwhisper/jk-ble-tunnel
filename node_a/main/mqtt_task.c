@@ -43,10 +43,14 @@ void mqtt_publish_health(void)
     if (!s_cli) return;
     char j[128];
     snprintf(j, sizeof(j),
-             "{\"heap\":%u,\"min_heap\":%u,\"rssi\":%d,\"up\":%lld}",
+             "{\"heap\":%u,\"min_heap\":%u,\"rssi\":%d,\"up\":%lld,"
+             "\"ble\":%d,\"conn\":%u,\"disc\":%u}",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)esp_get_minimum_free_heap_size(),
-             net_wifi_rssi(), (long long)(esp_timer_get_time()/1000000));
+             net_wifi_rssi(), (long long)(esp_timer_get_time()/1000000),
+             ble_owner_ble_enabled() ? 1 : 0,
+             (unsigned)ble_owner_conn_count(),
+             (unsigned)ble_owner_disc_count());
     pub(CFG_MQTT_BASE "/bridge/health", j, 0);
 }
 
@@ -121,6 +125,14 @@ static void on_cmd(const char *t, int tlen, const char *data, int dlen)
         pub(CFG_MQTT_BASE "/bridge/cmd/gattdump", "", 1); /* clear retained */
         char idb[8] = {0}; int in = dlen < 7 ? dlen : 7; memcpy(idb, data, in);
         ble_owner_gattdump((uint8_t)atoi(idb));
+        return;
+    }
+    if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/ble")) {
+        if (dlen == 0) return;
+        pub(CFG_MQTT_BASE "/bridge/cmd/ble", "", 1);       /* clear retained */
+        bool on = (data[0] == '1' || data[0] == 'o' || data[0] == 'O')
+                  && !(dlen >= 2 && (data[1] == 'f' || data[1] == 'F'));
+        ble_owner_set_ble(on);
         return;
     }
     if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/nvsclear")) {

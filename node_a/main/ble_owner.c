@@ -71,6 +71,26 @@ static int scan_dump_event(struct ble_gap_event *event, void *arg);
 
 void ble_owner_scan_dump(void) { s_scan_req = true; }
 
+/* ---- BLE master switch + connect/disconnect counters -------------------- */
+static volatile bool s_ble_enabled = CFG_BLE_ON_AT_BOOT;
+static volatile uint32_t s_conn_events, s_disc_events;
+bool ble_owner_ble_enabled(void) { return s_ble_enabled; }
+uint32_t ble_owner_conn_count(void) { return s_conn_events; }
+uint32_t ble_owner_disc_count(void) { return s_disc_events; }
+void ble_owner_set_ble(bool on)
+{
+    s_ble_enabled = on;
+    ESP_LOGW(TAG, "BLE master switch: %s", on ? "ON" : "OFF");
+    if (!on) {
+        /* Drop everything held so the units go quiet immediately. */
+        xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+        for (int i = 0; i < CFG_LINK_POOL_SIZE; i++)
+            if (s_links[i].in_use && s_links[i].conn_handle)
+                ble_gap_terminate(s_links[i].conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        xSemaphoreGive(s_mtx_link_pool);
+    }
+}
+
 /* ---- full GATT dump (jkbms/bridge/cmd/gattdump <id>) -------------------- */
 /* Walk the COMPLETE service/characteristic table of a connected unit and
  * publish it to jkbms/bridge/gatt. The harvest only records the JK FFE0/FFE1
@@ -336,6 +356,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         link_t *l = arg;   /* link chosen in the connect call */
         s_connecting = NULL;   /* scan/connect sequence resolved */
         if (event->connect.status == 0) {
+            s_conn_events++;   /* the number that can't lie (each = one chirp) */
             l->conn_handle = event->connect.conn_handle;
             /* Request larger MTU, then discover the JK service. */
             ble_gattc_exchange_mtu(l->conn_handle, NULL, NULL);        /* NIMBLE-PASS */
@@ -351,6 +372,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return 0;
     }
     case BLE_GAP_EVENT_DISCONNECT: {
+        s_disc_events++;
         link_t *l = link_by_conn(event->disconnect.conn.conn_handle);
         if (l) {
             set_link_state(l->bms_id, LINK_REACHABLE_IDLE, false);
@@ -418,7 +440,16 @@ static int scan_event(struct ble_gap_event *event, void *arg)
         ble_gap_disc_cancel();
         ble_addr_t addr = event->disc.addr;
         link_t *l = s_connecting;
-        if (ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &addr, 5000, NULL, gap_event, l) != 0) {
+        /* Long-interval, long-supervision connection (see config.h rationale). */
+        static const struct ble_gap_conn_params cp = {
+            .scan_itvl = 0x0010, .scan_window = 0x0010,
+            .itvl_min = CFG_CONN_ITVL_MIN_MS * 4 / 5,   /* ms -> 1.25 ms units */
+            .itvl_max = CFG_CONN_ITVL_MAX_MS * 4 / 5,
+            .latency  = CFG_CONN_LATENCY,
+            .supervision_timeout = CFG_CONN_SUPERVISION_MS / 10, /* 10 ms units */
+            .min_ce_len = 0, .max_ce_len = 0,
+        };
+        if (ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &addr, 5000, &cp, gap_event, l) != 0) {
             s_connecting = NULL;
             l->txn_active = false;
             respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
@@ -443,7 +474,7 @@ static int scan_event(struct ble_gap_event *event, void *arg)
 static void start_connect(link_t *l)
 {
     const char *name = name_for(l->bms_id);
-    if (!name || s_connecting || s_scan_active ||
+    if (!name || !s_ble_enabled || s_connecting || s_scan_active ||
         net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
         /* No target, another connect in flight, a diagnostic scan owns the
          * radio, or WiFi is re-associating (shared radio — scanning now would
