@@ -129,8 +129,9 @@ LL event counters. Findings, in discovery order:
    params**, migrating between units — resolved by the biggest finding:
 6. **THE JK BLE MODULES THEMSELVES WEDGE under connect churn** and then beep
    CONSTANTLY on their own — bank 2 beeped nonstop while our BLE was fully
-   OFF. **The wedge is TRANSIENT: bank 2 self-cleared after a few minutes of
-   radio quiet, with NO power-cycle** (owner correction). Bank 1 was
+   OFF. Bank 2 stopped beeping without a power-cycle — whether it 'self-cleared'
+   or stopped for some other reason is UNKNOWN (single observation; the
+   self-clear mechanism is a guess, per owner). Bank 1 was
    power-cycled and also cleared — sufficient but possibly unnecessary.
    Operational guidance: stop all BLE activity and WAIT a few minutes first;
    power-cycle only if beeping persists. Much of the day's churn was probably
