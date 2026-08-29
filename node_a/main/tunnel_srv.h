@@ -21,6 +21,10 @@ void tunnel_send_read_cache(uint8_t bms_id, uint8_t idx, const uint8_t *data, ui
  * harvest) so Node B can advertise them without waiting for a reconnect. */
 void tunnel_srv_announce(void);
 
+/* IDENT + LINK only (no TABLE): the periodic self-heal for Node B's RAM-only
+ * advertising state. Supervisor calls it every ~30 s while the tunnel is up. */
+void tunnel_srv_refresh(void);
+
 bool tunnel_is_up(void);
 
 #endif /* TUNNEL_SRV_H */

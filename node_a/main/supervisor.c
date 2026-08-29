@@ -249,6 +249,12 @@ static void supervisor_task(void *arg)
         { static int ka; if (++ka >= 15) { ka = 0;
               if (ble_owner_ble_enabled()) ble_owner_keepalive_read(); } }
         { static int hb; if (++hb >= 15) { hb = 0; mqtt_publish_health(); } }
+        /* IDENT+LINK refresh to Node B: repairs any tunnel frame lost to a
+         * full out-queue, and rebuilds B's RAM-only adv state after B reboots
+         * (B's one-shot TABLE_REQ resync was the only writer before, and a
+         * lost frame stayed lost forever — 2026-08-29 "TUN 0+2 only"). */
+        { static int rf; if (++rf >= 30) { rf = 0;
+              if (tunnel_is_up()) tunnel_srv_refresh(); } }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

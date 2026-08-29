@@ -46,7 +46,16 @@ static void enqueue(uint8_t type, uint8_t bms_id, const uint8_t *pl, uint16_t le
 {
     if (len > TUNNEL_MAX_PAYLOAD) return;
     tun_out_t m; m.len = frame(m.buf, type, bms_id, pl, len);
-    xQueueSend(s_out, &m, 0);   /* drop if backed up: state is refreshed anyway */
+    /* Never block (announce runs ON the tunnel task, which is the only
+     * drainer — blocking here would deadlock). A drop is repaired by the
+     * 30 s IDENT+LINK refresh, but it must never be silent: a full resync
+     * burst tail-dropped here left Node B advertising the wrong clone set
+     * for hours (2026-08-29, "TUN 0+2 only"). */
+    if (xQueueSend(s_out, &m, 0) != pdTRUE) {
+        static uint32_t s_drops;
+        ESP_LOGW(TAG, "out-queue FULL: dropped type 0x%02x id %u (drop #%lu)",
+                 type, bms_id, (unsigned long)++s_drops);
+    }
 }
 
 void tunnel_send_link(uint8_t id, tunnel_link_state_t st)
@@ -77,10 +86,27 @@ void tunnel_srv_announce(void)
             break;
         }
     }
-    /* IDENT + LINK per unit. */
+    tunnel_srv_refresh();
+}
+
+/* IDENT + LINK for every unit — the cheap, TABLE-less half of the announce.
+ * Called by the supervisor every ~30 s while the tunnel is up so that a frame
+ * lost to a full out-queue (or a Node B restart racing the one-shot resync)
+ * self-heals instead of leaving B's advertising set wrong forever: idents and
+ * links otherwise never change in steady state, so a lost one was permanent
+ * (2026-08-29). Deliberately no TUN_TABLE here — B rebuilds its GATT table on
+ * that frame, which is not something to poke at while an app is connected. */
+void tunnel_srv_refresh(void)
+{
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
+        /* Parked unit (NULL name in CFG_BMS): no IDENT — its stale NVS harvest
+         * still carries a name, and announcing it made Node B advertise a
+         * clone with no live bank behind it ("TUN 0 won't connect"). */
+        bool parked = true;
+        for (int i = 0; i < CFG_NUM_UNITS; i++)
+            if (CFG_BMS[i].bms_id == id) { parked = (CFG_BMS[i].name == NULL); break; }
         harvest_entry_t h;
-        if (nvs_get_harvest(id, &h) && h.valid)
+        if (!parked && nvs_get_harvest(id, &h) && h.valid && h.name[0])
             enqueue(TUN_IDENT, id, (const uint8_t *)h.name, strlen(h.name));
         bms_runtime_t rt; state_get_runtime(id, &rt);
         uint8_t st = (uint8_t)rt.link; enqueue(TUN_LINK, id, &st, 1);
@@ -210,6 +236,10 @@ static void tunnel_task(void *arg)
 
 void tunnel_srv_start(void)
 {
-    s_out = xQueueCreate(8, sizeof(tun_out_t));  /* 8 x ~520 B (heap guard) */
+    /* 24 deep: a full announce is 9 frames (TABLE + 4x IDENT + 4x LINK)
+     * enqueued back-to-back on the tunnel task, which cannot drain mid-burst
+     * — at depth 8 the tail was GUARANTEED dropped on every resync. 24 holds
+     * two full bursts plus stragglers; ~12.5 KB, nothing on the S3's PSRAM. */
+    s_out = xQueueCreate(24, sizeof(tun_out_t));
     xTaskCreatePinnedToCore(tunnel_task, "tunnel_srv", 6144, NULL, 5, NULL, tskNO_AFFINITY);
 }

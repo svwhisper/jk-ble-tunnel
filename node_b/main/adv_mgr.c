@@ -88,7 +88,12 @@ static bool should_advertise(uint8_t id)
 {
     if (s_set[id].connected) return false;              /* connected set is silent */
     if (!tunnel_cli_up()) return false;                 /* no tunnel => lie (spec §11) */
-    if (s_set[id].link == LINK_UNREACHABLE && !CFG_ADVERTISE_WHEN_DOWN) return false;
+    /* LINK_UP only, not merely != UNREACHABLE: A holds every live bank's link
+     * permanently (pool == fleet, idle-disconnect off), so anything else means
+     * the clone has no data behind it. REACHABLE_IDLE notably includes parked
+     * unit 0 — advertising it gave the app a connectable ghost that could
+     * never serve ("TUN 0 won't connect", 2026-08-29). */
+    if (s_set[id].link != LINK_UP && !CFG_ADVERTISE_WHEN_DOWN) return false;
     return s_set[id].name[0] != '\0';
 }
 
@@ -111,8 +116,12 @@ static void apply(uint8_t id)
 void adv_mgr_set_name(uint8_t id, const char *name)
 {
     if (id >= CFG_NUM_UNITS) return;
-    strlcpy(s_set[id].name, name, sizeof(s_set[id].name));
-    if (s_set[id].configured) set_adv_data(id);
+    /* A re-sends idents every ~30 s (self-heal refresh); only touch the live
+     * adv payload when the name actually changed. */
+    if (strncmp(s_set[id].name, name, sizeof(s_set[id].name)) != 0) {
+        strlcpy(s_set[id].name, name, sizeof(s_set[id].name));
+        if (s_set[id].configured) set_adv_data(id);
+    }
     apply(id);
 }
 void adv_mgr_on_link(uint8_t id, tunnel_link_state_t st)
