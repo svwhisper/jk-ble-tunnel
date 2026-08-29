@@ -57,7 +57,7 @@ void app_main(void)
     arbiter_start();               /* serialise + policy                     */
     decoder_start();               /* frames -> state cache -> MQTT          */
     ble_owner_start();             /* NimBLE central (the only BLE task)     */
-    mqtt_start();                  /* Node-RED path + LWT                    */
+    mqtt_start();                  /* automation (MQTT) path + LWT           */
     tunnel_srv_start();            /* Node B tunnel                          */
     supervisor_start();            /* harvest, probes, idle-disc, meas guard */
     display_start();               /* onboard OLED: role + status            */

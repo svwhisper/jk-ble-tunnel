@@ -1,6 +1,6 @@
 /*
  * supervisor.h — watchdog, reachability-probe floor, idle-disconnect timers,
- * round-robin Node-RED polling, measurement-timeout guard (spec §4/§9/§11).
+ * reconnect pacing, measurement-timeout guard (spec §4/§9/§11).
  * Also runs the boot harvest coordinator.
  */
 #ifndef SUPERVISOR_H

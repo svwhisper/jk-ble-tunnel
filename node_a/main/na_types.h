@@ -15,7 +15,7 @@
 /* Who originated a transaction (spec §4 q_bms_request.source). */
 typedef enum {
     SRC_APP      = 0,  /* relayed app GATT write via tunnel  */
-    SRC_MQTT     = 1,  /* Node-RED cmd via MQTT              */
+    SRC_MQTT     = 1,  /* automation cmd via MQTT            */
     SRC_INTERNAL = 2,  /* poll / measurement / harvest       */
 } req_source_t;
 
