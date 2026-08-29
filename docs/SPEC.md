@@ -8,11 +8,13 @@
 
 ## 1. Goal
 
-Let an **unmodified JK BMS iOS app** connect to and configure JK BMS units that are physically out of Bluetooth range, and simultaneously give **house automation (any MQTT client)** read access to all BMS values plus write access to **balance parameters only**. Each BMS accepts exactly one BLE client at a time, so a single owner must arbitrate.
+Let an **unmodified JK BMS iOS app** connect to and configure JK BMS units that are physically out of Bluetooth range. That is the product. Alongside it, node A exposes an **MQTT ops channel**: remote commands (BLE on/off, scan, raw capture, GATT dump, reboot), health/forensics topics, decoded telemetry, and — once enabled — an operator-driven balance-write path.
 
-Two consumers, one radio link per BMS:
-- **iOS app** — full function, must believe it is talking to the real BMS.
-- **automation** — read-all, write-balance-only, via MQTT (a Mosquitto broker; the consumer is whatever the site runs — Node-RED, Home Assistant, scripts — this code only speaks MQTT).
+**BLE links are session-oriented, not 24×7.** The BMS modules sleep their radios ~25 s after the last received command, so decoded MQTT telemetry is *opportunistic* — whatever streams during sessions (a latched module streams for hours; a mortal one gives periodic snapshots). It is not a monitoring feed and nothing should be built that depends on its continuity; continuous monitoring and control belong to the site's RS485/CAN path. The BLE-unique data worth having is **per-cell voltage and balance-wire resistance**.
+
+Each BMS accepts exactly one BLE client at a time, so a single owner must arbitrate:
+- **iOS app** — full function, must believe it is talking to the real BMS. Takes precedence.
+- **MQTT ops channel** — operator tooling; any MQTT client, nothing product-specific.
 
 **Four BMS units are in scope.** The house-side node presents all four to the app at once; the operator selects one by connecting to it in the app, and switches by disconnecting and connecting to another — using nothing but the app.
 
@@ -41,10 +43,10 @@ Two consumers, one radio link per BMS:
   BMS1 ┐
   BMS2 ┤ ═BLE═► Node A ══TCP(LAN)══► Node B ═BLE═► iOS app (sees 4 devices)
   BMS3 ┤          │
-  BMS4 ┘          └══MQTT══► Mosquitto ══► automation (reads all 4, writes balance)
+  BMS4 ┘          └══MQTT══► Mosquitto ══► ops + opportunistic telemetry
 ```
 
-Node A holds a BLE central link to **all four units concurrently** (4-slot link pool, `NIMBLE_MAX_CONNECTIONS=4` on the S3) and multiplexes them. Every BMS interaction — from the app (relayed via B, tagged with which identity) or from automation (via MQTT) — is funnelled through a per-BMS command queue with a strict response-or-timeout gate, because the JK protocol is request/response framed and interleaving corrupts its state machine.
+Node A holds a BLE central link to **all four units concurrently** (4-slot link pool, `NIMBLE_MAX_CONNECTIONS=4` on the S3) and multiplexes them. Every BMS interaction — from the app (relayed via B, tagged with which identity) or from the MQTT ops channel — is funnelled through a per-BMS command queue with a strict response-or-timeout gate, because the JK protocol is request/response framed and interleaving corrupts its state machine.
 
 ---
 
@@ -165,11 +167,11 @@ TCP, LAN-only, `TCP_NODELAY` on. Length-prefixed binary frames. Frames carry a `
 
 ---
 
-## 7. MQTT contract (A ↔ automation)
+## 7. MQTT contract (the ops channel)
 
 Base topic per unit: `jkbms/<bms_id>/`  (bms_id ∈ the four units)
 
-> **Scope note:** cell voltages and pack summary duplicate the existing aggregator API (`192.168.3.90/api`) and the `bms-history` archive on `.5`, which remain canonical for voltage history. The data that is genuinely BLE-only — **wire resistance, the offset-114 warning bitmask, balance settings, and the balance write path** — is the point of this contract. Keep publishing `state/cells`/`state/summary` (they're nearly free), but automation should not grow a second source of truth from them.
+> **Scope note:** cell voltages and pack summary duplicate the existing aggregator API (`192.168.3.90/api`) and the `bms-history` archive on `.5`, which remain canonical for voltage history. The data that is genuinely BLE-only — **wire resistance, the offset-114 warning bitmask, balance settings, and the balance write path** — is the point of this contract. Keep publishing `state/cells`/`state/summary` (they're nearly free), but nothing should grow a second source of truth from them — they flow only while a session streams (§1).
 
 ### Bridge-level (Node A)
 
@@ -177,7 +179,7 @@ Base topic per unit: `jkbms/<bms_id>/`  (bms_id ∈ the four units)
 |---|---|---|
 | `jkbms/bridge/status` | JSON `{online, boot_time, ...}`; **registered as MQTT LWT** so a dead Node A reads offline, not stale | yes |
 
-A publishes a fresh `bridge/status` on every boot — automation can use it to detect restarts (queued deferred writes are lost across reboots, §10).
+A publishes a fresh `bridge/status` on every boot — MQTT clients can use it to detect restarts (queued deferred writes are lost across reboots, §10).
 
 ### Published by Node A per unit (retained where noted)
 
@@ -226,7 +228,7 @@ Results acked on `jkbms/<bms_id>/ack` with `{cmd, id, status, detail, readback}`
 
 2. **It's a bus-bar monitor too.** Computed indirectly through bus bars and cells, so a poor cell-terminal/bus-bar joint shows here — high-value telemetry given long high-current runs into a busbar. Good joints sit well under ~0.08 Ω; original crimped harnesses can read 0.25–0.30 Ω.
 
-3. **Read and write are coupled.** The BMS derives lead resistance by comparing cell voltage with vs. without the set balance current. At high SOC the voltage to push balance current inflates apparent resistance; near full charge deltaV collapses to ~0, yielding zeros. **The balance-current parameter automation writes is the same parameter that decides whether the resistance metric is valid.**
+3. **Read and write are coupled.** The BMS derives lead resistance by comparing cell voltage with vs. without the set balance current. At high SOC the voltage to push balance current inflates apparent resistance; near full charge deltaV collapses to ~0, yielding zeros. **The balance-current parameter the write path sets is the same parameter that decides whether the resistance metric is valid.**
 
 ### Measurement-mode sequence (`cmd/measure`)
 
@@ -268,13 +270,13 @@ Trend only samples captured under comparable conditions. Log SOC + balance curre
 6. **Rate limit** — default: one balance write per charge cycle unless overridden; coalesce rapid writes.
 
 ### Arbitration policy (default)
-- **App connected to that unit → automation writes BLOCKED**, acked `status: deferred_app_active`, optionally queued (config flag) to apply on app disconnect. Human-in-app takes precedence.
-- **The deferred queue is RAM-only and is lost on reboot** — deliberately: a stale queued write applying after a restart is worse than a dropped one. automation detects restarts via `bridge/status` and re-issues if still wanted.
+- **App connected to that unit → MQTT-sourced writes BLOCKED**, acked `status: deferred_app_active`, optionally queued (config flag) to apply on app disconnect. Human-in-app takes precedence.
+- **The deferred queue is RAM-only and is lost on reboot** — deliberately: a stale queued write applying after a restart is worse than a dropped one. the issuer detects restarts via `bridge/status` and re-issues if still wanted.
 - App reads/telemetry continue regardless.
-- Two loops on one variable: if automation writes balance settings while DVCC also curtails, note both act — reconciliation is out of scope, but log both in the ack.
+- Two loops on one variable: if an MQTT-sourced write changes balance settings while DVCC also curtails, note both act — reconciliation is out of scope, but log both in the ack.
 
 ### False-alarm awareness
-Some firmware emits false balance-wire-resistance warnings. `state/faults` exposes the raw bitmask so automation applies its own debounce rather than the firmware forcing an alarm.
+Some firmware emits false balance-wire-resistance warnings. `state/faults` exposes the raw bitmask so the consumer applies its own debounce rather than the firmware forcing an alarm.
 
 ---
 
@@ -308,7 +310,7 @@ Site-specific values (WiFi, MQTT broker, BMS PIN, tunnel host, **and the fleet t
 3. **Switch:** disconnect in app, connect to another; previous set resumes advertising; new unit's real link comes up within ~5 s (app-attach driver); no leaked BLE slots.
 4. **Read path:** an MQTT client sees per-unit cells/summary/settings/faults; failed resistances are null not 0.
 5. **Write path:** `cmd/balance/set` on a bench BMS changes value; readback confirms and updates `state/settings` + B's cache; out-of-scope + out-of-range rejected.
-6. **Arbitration:** app on a unit → automation write deferred/blocked per policy; app writes unaffected. App changes a setting then disconnects → post-session re-read updates retained settings.
+6. **Arbitration:** app on a unit → MQTT-sourced write deferred/blocked per policy; app writes unaffected. App changes a setting then disconnects → post-session re-read updates retained settings.
 7. **Measurement mode:** captured resistances plausible; settings restored; conditions published.
 8. **Measurement crash-restore + abort:** power-cycle Node A mid-measurement → boot restores saved balance settings and publishes the alert. Connect the app to that unit mid-measurement → measurement aborts and settings are restored before the app session proceeds.
 9. **Tunnel drop mid-session:** (a) blip shorter than `TUNNEL_GRACE_MS` → the app session survives; resync (`TABLE_REQ` → state → `CLIENT` replay) reconciles A and grace-queued writes flush. (b) Longer outage → B drops the app + pauses advertising; on reconnect, full resync and normal operation resumes.
