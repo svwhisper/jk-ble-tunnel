@@ -13,36 +13,19 @@
 #include "secret.h"          /* WIFI_SSID/PASS, MQTT_*, JK_LOGIN_PIN */
 
 /* ---- Topology / identity ------------------------------------------------ */
-/* Four real garage units (all present, all advertising — verified by a phone
- * scan 2026-08-28). With all four present there is no phantom-unit scan waste. */
-#define CFG_NUM_UNITS            4
-
-/* Per-unit target: BLE name to match + a stable local bms_id (0..3). Match is
- * an exact strcmp on the advertised name, so the exact spelling matters —
- * note units 0 and 3 use an UNDERSCORE, units 1 and 2 use a SPACE. Addresses
- * (in comments) are informational; selection is purely by name (spec §5).
- * If a unit won't connect, run the MQTT scan dump (jkbms/bridge/cmd/scan) to
- * see the exact bytes Node A observes and correct the string here. */
-/* Selection is BY PUBLIC ADDRESS with PASSIVE scanning (2026-08-28 evening):
- * JK names live only in the SCAN RESPONSE, and active scanning's SCAN_REQ
- * packets CHIRP the units — proven when parked bank 3 chirped during scans
- * that never connect to it. Addresses are the burned-in public addrs (from
- * scan dumps + phone). NULL name OR zero addr = parked. addr bytes are
+/* The fleet itself (names, ids, public addresses, count) lives in the site
+ * file — components/secret/secret.h, FLEET_BMS_TABLE — so adopting this code
+ * needs no source edits (see secret.h.example for the how-to).
+ * Engineering rationale that must survive (2026-08-28): selection is BY
+ * PUBLIC ADDRESS with PASSIVE scanning. JK names live only in the SCAN
+ * RESPONSE, and active scanning's SCAN_REQ packets CHIRP the units — proven
+ * when parked bank 3 chirped during scans that never connect to it. Public-
+ * only matching also forecloses the Node-B clone self-loop class (clones use
+ * static-random addresses). NULL name OR zero addr = parked. addr bytes are
  * little-endian as NimBLE presents them (reversed from display order). */
+#define CFG_NUM_UNITS            FLEET_NUM_UNITS
 typedef struct { const char *name; uint8_t bms_id; uint8_t addr[6]; } cfg_bms_target_t;
-static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
-    /* Un-parked 2026-08-29 evening (the "get bms 0 working" push): its
-     * connects-but-never-streams record predates the FFE2 opener trilogy,
-     * the gentle client AND the sleep/latch model — and the Telink GATT
-     * table (different HW from the C8:47:80 trio) may break the CCCD=val+1
-     * assumption in ble_owner.c. Diagnose live: gattdump on first connect. */
-    { "BMS_0-00", 0, {0x05,0x86,0x00,0x38,0xC1,0xA4} },   /* A4:C1:38:00:86:05 Telink */
-    /* Un-parked 2026-08-29 for the 0x6C test: its "chronic flakiness"
-     * predates the stream-enable discovery and may vanish with it. */
-    { "BMS 1-01", 1, {0xD5,0x1A,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:1A:D5 */
-    { "BMS 2-02", 2, {0x1F,0x2A,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:2A:1F */
-    { "BMS_3-03", 3, {0xCE,0x58,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:58:CE */
-};
+static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = { FLEET_BMS_TABLE };
 
 /* ---- Link pool / timing (spec §4) --------------------------------------- */
 #define CFG_LINK_POOL_SIZE       4       /* hold ALL four banks (S3 + 6C era) */

@@ -44,7 +44,11 @@ garage battery enclosure the house cannot reach by radio.
 ## Build
 
 ESP-IDF v5.2.3. Copy `components/secret/secret.h.example` →
-`components/secret/secret.h` and fill in (git-ignored; WiFi + MQTT + PIN).
+`components/secret/secret.h` and fill in (git-ignored). That one file is the
+entire site config: WiFi, MQTT broker, BMS PIN, **and your BMS fleet**
+(`FLEET_BMS_TABLE` — each unit's advertised name, id, and public address;
+the example explains how to discover them with the built-in MQTT scan dump).
+No source edits needed to adopt a different fleet.
 
 ```
 idf.py -C node_a set-target esp32s3 build

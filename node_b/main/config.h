@@ -8,9 +8,11 @@
 #include "jk_ble_defs.h"
 #include "secret.h"          /* WIFI_*, NODE_A_HOST, NODE_A_PORT */
 
-/* Four identities, matching Node A's four garage units (unit 0 parked on A, so
- * its clone stays down; units 1-3 are live and connectable by the phone). */
-#define CFG_NUM_UNITS            4
+/* One clone identity per fleet unit — sized from the shared site file
+ * (components/secret/secret.h) so node A and node B can never disagree.
+ * Budget note: each CONNECTABLE clone adv set costs 2 controller activities
+ * (sdkconfig BT_CTRL_BLE_MAX_ACT, raised 6→10 when the 4th clone landed). */
+#define CFG_NUM_UNITS            FLEET_NUM_UNITS
 
 /* Advertising (spec §5): legacy-format connectable PDUs per set for app compat.
  * One app connection at a time; the other sets stay advertising. */
