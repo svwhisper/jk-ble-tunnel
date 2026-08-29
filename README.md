@@ -6,7 +6,7 @@ garage battery enclosure the house cannot reach by radio.
 
 ```
   garage (Faraday)                        house
- ┌─────────────────┐                 ┌──────────────────┐
+ ┌─────────────────┐                ┌──────────────────┐
  │ 4× JK BMS       │   BLE          │                  │
  │ BMS_0-00..3-03  ├────► Node A ───┼──TCP──► Node B   │◄──BLE── iOS JK app
  │                 │   (ESP32-S3    │       (ESP32-C3, │
