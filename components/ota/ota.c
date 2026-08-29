@@ -107,6 +107,8 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+bool ota_is_up(void) { return s_srv != NULL; }
+
 void ota_start(uint16_t port)
 {
     if (s_srv) return;

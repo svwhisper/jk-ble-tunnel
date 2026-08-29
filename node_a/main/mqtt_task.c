@@ -50,13 +50,14 @@ void mqtt_publish_health(void)
      * heap=8.39MB because internal was gone after ~25 min of link churn). */
     snprintf(j, sizeof(j),
              "{\"heap\":%u,\"min_heap\":%u,\"ifree\":%u,\"imin\":%u,"
-             "\"rssi\":%d,\"up\":%lld,"
+             "\"rssi\":%d,\"up\":%lld,\"ota\":%d,"
              "\"ble\":%d,\"conn\":%u,\"disc\":%u}",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)esp_get_minimum_free_heap_size(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              net_wifi_rssi(), (long long)(esp_timer_get_time()/1000000),
+             ota_is_up() ? 1 : 0,
              ble_owner_ble_enabled() ? 1 : 0,
              (unsigned)ble_owner_conn_count(),
              (unsigned)ble_owner_disc_count());

@@ -14,6 +14,7 @@
 #ifndef OTA_H
 #define OTA_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Confirm the running image so the bootloader won't roll it back. Call ONCE,
@@ -31,5 +32,12 @@ void ota_start(uint16_t port);
  * exhaustion, where an xTaskCreate-based deferred reboot fails silently.
  * Shared by the OTA receiver and the MQTT cmd/reboot handler. */
 void ota_schedule_reboot(void);
+
+/* True once the HTTP receiver is actually serving. httpd_start can fail at
+ * boot (resource squeeze at second ~5 while WiFi+NimBLE come up — observed
+ * 2026-08-29, every boot of one image) and a one-shot ota_start then leaves
+ * the node permanently un-updatable. The supervisor polls this and re-calls
+ * ota_start until it sticks; health publishes it as \"ota\". */
+bool ota_is_up(void);
 
 #endif /* OTA_H */

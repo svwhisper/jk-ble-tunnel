@@ -37,6 +37,16 @@ void app_main(void)
     net_wifi_wait(20000);
     net_sntp_start(CFG_NTP_SERVER);
 
+    /* Push-OTA receiver: started HERE, before NimBLE + the task fleet, while
+     * internal RAM is plentiful. Started at the tail it lost the resource
+     * race on some builds: httpd_start bound :CFG_OTA_PORT, failed its later
+     * task-create, LEAKED the bound listener (phantom socket that accepts
+     * and never serves), and every retry then died EADDRINUSE — the node was
+     * un-updatable over the air for the whole boot (2026-08-29). Binds
+     * 0.0.0.0, so late WiFi still gets served. The supervisor retries it
+     * every 30 s should it ever still fail. */
+    ota_start(CFG_OTA_PORT);
+
     queues_init();
     state_cache_init();
 
@@ -52,13 +62,9 @@ void app_main(void)
     supervisor_start();            /* harvest, probes, idle-disc, meas guard */
     display_start();               /* onboard OLED: role + status            */
 
-    /* Push-OTA. Start the receiver UNCONDITIONALLY: httpd binds 0.0.0.0 and
-     * serves once an IP arrives, so a node that joins WiFi late (the AP came up
-     * after boot — e.g. the garage AP's SSID was fixed after Node A powered on)
-     * still exposes :CFG_OTA_PORT without needing a reboot. Confirm the running
-     * image only once WiFi is actually up; a bad build that can't join WiFi is
-     * left unconfirmed and self-reverts on the next reset (§addendum). */
-    ota_start(CFG_OTA_PORT);
+    /* Confirm the running image only once WiFi is actually up; a bad build
+     * that can't join WiFi is left unconfirmed and self-reverts on the next
+     * reset (§addendum). */
     if (net_wifi_up()) ota_mark_valid();
     else ESP_LOGW(TAG, "no WiFi at bringup — image left unconfirmed (rollback armed)");
 

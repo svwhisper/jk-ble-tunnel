@@ -11,6 +11,7 @@
 #include "mqtt_task.h"
 #include "tunnel_srv.h"
 #include "nvs_store.h"
+#include "ota.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_task_wdt.h"
@@ -253,6 +254,11 @@ static void supervisor_task(void *arg)
          * lost frame stayed lost forever — 2026-08-29 "TUN 0+2 only"). */
         { static int rf; if (++rf >= 30) { rf = 0;
               if (tunnel_is_up()) tunnel_srv_refresh(); } }
+        /* OTA receiver self-heal: httpd_start can lose the boot-time resource
+         * race (observed failing at second ~5 on every boot of one image,
+         * leaving the node un-updatable). ota_start is idempotent. */
+        { static int oa; if (++oa >= 30) { oa = 0;
+              if (!ota_is_up() && net_wifi_up()) ota_start(CFG_OTA_PORT); } }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
