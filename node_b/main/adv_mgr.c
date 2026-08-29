@@ -8,6 +8,7 @@
 #include "tunnel_cli.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "nvs.h"
 
 #include "host/ble_gap.h"
 #include "host/ble_hs.h"
@@ -143,10 +144,34 @@ void adv_mgr_pause_all(void)
 void adv_mgr_init(void)
 {
     memset(s_set, 0, sizeof(s_set));
+    /* Static-random address per set (top two bits = 11), PERSISTED in NVS:
+     * phones dedupe their scan list by address, so per-boot random addresses
+     * turned every Node B reboot into four "new" devices plus stale ghosts
+     * of the old ones (the duplicate-TUN-3 sighting, 2026-08-29). Minted
+     * once, reused forever. */
+    uint8_t addrs[CFG_NUM_UNITS * 6];
+    size_t len = sizeof(addrs);
+    bool have = false;
+    nvs_handle_t h;
+    if (nvs_open("advmgr", NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_get_blob(h, "addrs", addrs, &len) == ESP_OK &&
+            len == sizeof(addrs))
+            have = true;
+        if (!have) {
+            esp_fill_random(addrs, sizeof(addrs));
+            for (int i = 0; i < CFG_NUM_UNITS; i++) addrs[i*6 + 5] |= 0xC0;
+            nvs_set_blob(h, "addrs", addrs, sizeof(addrs));
+            nvs_commit(h);
+            have = true;
+        }
+        nvs_close(h);
+    }
+    if (!have) {                    /* NVS broken: per-boot random fallback */
+        esp_fill_random(addrs, sizeof(addrs));
+        for (int i = 0; i < CFG_NUM_UNITS; i++) addrs[i*6 + 5] |= 0xC0;
+    }
     for (int i = 0; i < CFG_NUM_UNITS; i++) {
-        /* Deterministic static-random address per set (top two bits = 11). */
-        esp_fill_random(s_set[i].addr, 6);
-        s_set[i].addr[5] |= 0xC0;
+        memcpy(s_set[i].addr, &addrs[i*6], 6);
         s_set[i].link = LINK_UNREACHABLE;
     }
 }

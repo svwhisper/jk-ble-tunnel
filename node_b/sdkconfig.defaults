@@ -46,3 +46,9 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Four CONNECTABLE adv sets need 8 controller activities (2 each on the
+# C3 controller); the default 6 fit exactly three sets, and the fourth
+# (unit 0's clone, un-parked 2026-08-29) failed ext_adv_configure with
+# HCI 0x07 Memory Capacity Exceeded (rc=519) — TUN_3 lost the last slot.
+CONFIG_BT_CTRL_BLE_MAX_ACT=10

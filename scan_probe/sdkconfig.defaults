@@ -1,0 +1,11 @@
+# Scan probe — retired C3 Node A board, USB-Serial-JTAG console.
+# NOTE: leave NimBLE roles at defaults — disabling central/peripheral/
+# broadcaster breaks ble_gap.c compilation on this IDF (v5.2.3).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# The board's USB port is the C3's native USB-Serial-JTAG (no external bridge).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_FREERTOS_HZ=1000
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -30,6 +30,34 @@ power/SOC/cycles are meaningless on EVERY bank (Lynx/iBMS own those).
 Bank 0's cycles:0 / SOC 100 / I≈0 are expected, not decode errors. The
 meaningful BLE-unique payload remains cell volts + wire resistance.
 
+### TUN_3 outage + fix (2026-08-29 evening, after un-parking unit 0)
+Adding the 4th clone blew Node B's C3 controller activity budget: a
+CONNECTABLE adv set costs 2 activities, BT_CTRL_BLE_MAX_ACT was 6 = exactly
+three sets, and the refresh configures ids 0→3, so TUN_3 lost the last slot
+(`ext_adv_configure[3] rc=519` = HCI 0x07 Memory Capacity Exceeded, every
+30 s on B's console). Fix: MAX_ACT 6→10 (sdkconfig + defaults). Also made
+B's four static-random clone addresses NVS-persistent ("advmgr"/"addrs"):
+phones dedupe scans by address, so per-boot random addrs made every B
+reboot mint four "new" devices + stale ghosts (the duplicate-TUN-3
+sighting). Verified on-air: all four TUNs beaconing (owner + scan probe).
+
+### NEW TOOL: scan_probe/ (house-side BLE observer)
+The retired C3 ex-Node-A board, revived over USB — prints every named
+advert (`ADV <addr> rssi= evt= name=`) on the USB-Serial-JTAG console.
+Flash: `idf.py -C scan_probe -p /dev/cu.usbmodemXXX flash`; read with
+`stty -f /dev/cu.usbmodemXXX 115200 raw -hupcl; cat ...`. Active scanning
+is safe in the house (clones don't beep; garage is Faraday-walled). Node
+B's own console is ALSO readable the same way when it's on the Mac's USB —
+that's what caught rc=519. Mac-native BLE scanning is NOT available to
+Claude (TCC SIGABRTs unauthorized processes; bleak dies silently).
+
+### NEXT SESSION (owner, 2026-08-29): enable settings writes (O-2/O-5)
+Flip JK_ENABLE_WRITES and build the write path properly. Groundwork now in
+place: per-char ATT write-op selection covers unit 0's inverted props, and
+the app's write frames have been captured via the clones. Scope/safety
+still to design (the §10 balance-only whitelist stance, readback-verify,
+which registers). Remember unit-0's FFE2 is write-WITH-response.
+
 ## Prior READ FIRST — 2026-08-29 EOD: APP-VIA-TUNNEL WORKS ON ALL BANKS
 
 **STATUS: BLE ON (persisted; owner re-armed 13:05).** Victron currently
@@ -105,7 +133,8 @@ garage — tune CFG_RECONNECT_HOLD_PROD_S if annoying). iBMS clean ALL day
     verify TUN-0 app session end-to-end; does this module sleep/latch at all
     (6+ min unbroken on first contact + AT heartbeat suggest it never dozes)?
 (4) Owner re-enables iBMS charge control.
-(5) GitHub upload. (6) O-2/O-5 writes (JK_ENABLE_WRITES stays 0).
+(5) GitHub upload. (6) O-2/O-5 writes — SCHEDULED next session (owner,
+    2026-08-29): "tomorrow, we will get settings write enabled".
 (Resolved 08-29: duplicate TUN-3 advert after ~6 A-reboots — gone after a
 Node B restart + app restart; recurrence would point at B's adv-set table.)
 
