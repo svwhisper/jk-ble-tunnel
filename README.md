@@ -1,127 +1,63 @@
-# JK BMS BLE Tunnel
+# jk-ble-tunnel
 
-Two ESP32 nodes that let an **unmodified JK BMS iOS app** reach four JK BMS
-units that are out of Bluetooth range, and give **Node-RED** read-all +
-balance-only write access over MQTT. Implements
-[`../jk-ble-tunnel-spec.md`](../jk-ble-tunnel-spec.md) (rev 3).
+A BLE-over-TCP tunnel that lets the **unmodified iOS JK BMS app** reach four
+JK-PB2A16S20P units (fw 19.31, 16S 314 Ah) sealed inside a near-Faraday
+garage battery enclosure the house cannot reach by radio.
 
 ```
-  BMS1..4  ═BLE═►  Node A (garage)  ══TCP(LAN)══►  Node B (house)  ═BLE═►  iOS app
-                       │
-                       └══MQTT══►  Mosquitto  ══►  Node-RED
+  garage (Faraday)                        house
+ ┌─────────────────┐                 ┌──────────────────┐
+ │ 4× JK BMS       │   BLE          │                  │
+ │ BMS_0-00..3-03  ├────► Node A ───┼──TCP──► Node B   │◄──BLE── iOS JK app
+ │                 │   (ESP32-S3    │       (ESP32-C3, │
+ └─────────────────┘    central)    │        4 clone   │
+                                    │        adv sets  │
+                                    │        TUN_*)    │
+                                    └──────────────────┘
 ```
 
-- **Node A** — BLE central, owns the real BMS links, tunnel server, MQTT client.
-  Any WiFi+BLE ESP32 (WROOM/WROVER fine; external antenna recommended).
-- **Node B** — BLE 5.0 peripheral (C3/S3/C6). Advertises **four identities**
-  from a **single shared GATT table**; the app picks one by connecting.
-- **test_board** — a USB-tethered ESP32-S3 driven over its serial port (no
-  WiFi) that emulates either the iOS app (BLE central → tests Node B) or a JK
-  unit (BLE peripheral → tests Node A), since neither the phone nor the
-  batteries are on the bench yet.
+- **Node A** (`node_a/`, ESP32-S3, garage): BLE central holding all four
+  bank links; decodes cell frames to MQTT (cell volts + balance-wire
+  resistance — the values RS485/CAN paths don't carry); serves the tunnel;
+  remote ops + push-OTA over MQTT/HTTP.
+- **Node B** (`node_b/`, ESP32-C3, house): four advertising-set clones
+  (`TUN_0-00` … `TUN_3-03`, NVS-stable addresses) with a mirrored JK GATT
+  table; the app's writes relay verbatim through the tunnel to the real
+  unit, notifications flow back.
+- **test_board/**: TCP-driven bench emulator (plays app-central or
+  BMS-peripheral) — `tools/bench.py`.
+- **scan_probe/**: minimal BLE observer firmware (any spare ESP32-C3) that
+  prints every named advert over USB — the house-side diagnostic scanner.
+- **tools/**: `ota_push.py` (push OTA to either node), host-native protocol
+  tests (`host_test_jk_proto.c`).
 
-## Status — read before flashing
+## Documentation
 
-This is a first implementation written ahead of hardware. Two honesty
-boundaries, both deliberate:
-
-1. **The JK payload layout is not finalised.** Frame reassembly + checksum are
-   real; every decode **offset** in [`components/jk_proto/jk_proto.c`](components/jk_proto/jk_proto.c)
-   is a `VERIFY` best-guess to be confirmed against `syssi/esphome-jk-bms` and a
-   bench capture (spec O-1/O-2). The synthetic bench frames in
-   [`test_board/main/synth_frames.c`](test_board/main/synth_frames.c) use the
-   same offsets so decode round-trips on the bench.
-
-2. **The write path is compile-gated OFF.** `JK_ENABLE_WRITES=0`. Balance
-   writes, the login handshake, and the measurement-mode floor-lowering all
-   return "not supported" until the frame formats are ported and bench-verified.
-   Turning the flag on without the port is a hard `#error`. Everything *around*
-   the write path (validation pipeline, arbitration, readback plumbing, the NVS
-   measurement crash-guard) is implemented and testable now.
-
-Lines tagged `NIMBLE-PASS` need a compile/link check against the pinned ESP-IDF
-NimBLE headers (exact arg structs) — do that first on real hardware.
-
-No security layer and no node OTA, by owner decision (remote off-grid site;
-BLE/LAN range ⊆ physical access) — see the spec's Non-goals.
+- [`docs/SPEC.md`](docs/SPEC.md) — the design spec (rev 3).
+- [`SESSION_NOTES.md`](SESSION_NOTES.md) — living status + the hard-won
+  protocol/RF findings. **Read the top block first.** Highlights: the JK
+  app's opener trilogy (0x97, 0x96, 0x6C — 0x6C is SET-RTC, not auth; there
+  is no auth anywhere), module BLE sleep behavior, per-module ATT write-type
+  differences (Telink vs the trio), and the C3 controller's advertising
+  activity budget.
 
 ## Build
 
-Each node is its own ESP-IDF project. Pin an IDF version (5.x).
+ESP-IDF v5.2.3. Copy `components/secret/secret.h.example` →
+`components/secret/secret.h` and fill in (git-ignored; WiFi + MQTT + PIN).
 
-```bash
-# one-time, ONCE for all three projects: create the shared secrets header.
-# Every device joins the same AP, so WiFi lives here a single time; the file
-# also holds Node A's MQTT/PIN and Node B's Node-A host (git-ignored).
-cp components/secret/secret.h.example components/secret/secret.h   # then edit
-
-# Node A (ESP32-C3)
-cd node_a && idf.py set-target esp32c3 && idf.py build flash monitor
-
-# Node B (ESP32-C3)
-cd node_b && idf.py set-target esp32c3 && idf.py build flash monitor
-
-# Bench board (ESP32-S3 — Lonely Binary Gold Edition)
-cd test_board && idf.py set-target esp32s3 && idf.py build flash monitor
+```
+idf.py -C node_a set-target esp32s3 build
+idf.py -C node_b set-target esp32c3 build
 ```
 
-Also edit the per-unit target names in [`node_a/main/config.h`](node_a/main/config.h)
-(`CFG_BMS`) and the balance ranges (`CFG_BALANCE_RANGE`) for your cells.
+First flash over USB; afterwards `tools/ota_push.py a|b --host <ip>`.
 
-## Networking (hostnames + DHCP)
+## Deliberate stances
 
-No hardcoded IPs. Each device takes its address from DHCP and registers a
-hostname (`jk-node-a`, `jk-node-b`, `jk-test`); resolution uses `getaddrinfo`,
-which accepts a DNS name, a `.local` mDNS name, or a literal IP.
-
-- **Node B → Node A** dials `NODE_A_HOST` (in `secret.h`). For the bare name to
-  resolve, your DHCP server must publish the lease in DNS — on pfSense, enable
-  *Register DHCP leases in the DNS Resolver* and set `NODE_A_HOST` to the FQDN
-  it serves (e.g. `jk-node-a.<your-domain>`). A literal IP also works if you
-  prefer.
-- **Node A → MQTT broker** uses `MQTT_URI` by hostname, **no username/password**
-  (broker allows anonymous). A `broker.local` name resolves with no DNS setup if
-  the broker host runs mDNS/avahi (Linux/macOS do) — `.local` mDNS queries are
-  enabled in both nodes' `sdkconfig.defaults`.
-- The **bench board has no WiFi** — it is USB-tethered and driven over its
-  serial port (§ below); it reaches the nodes over Bluetooth.
-
-## Bench without hardware
-
-The test board is driven over its USB serial port (no WiFi). Find the port
-(macOS: `ls /dev/cu.*`, e.g. `/dev/cu.wchusbserial120`) and:
-
-```bash
-# emulate a BMS so Node A has something to talk to
-tools/bench.py /dev/cu.wchusbserial120
-> role bms JK-B2A20S20P
-> autopush 2000            # stream synthetic cell-info every 2 s
-                           # (notifies only once a central connects + subscribes)
-# ...point Node A at that name, watch MQTT jkbms/0/state/* populate.
-
-# to test Node B instead, reflash the board (one role per boot) and:
-> role app
-> connect JK-B2A20S20P     # by the name Node B advertises
-> sub
-> read
-> write aa5590eb9600...    # raw bytes relayed to Node A
-```
-
-`idf.py -C test_board -p <port> monitor` works too — just type the commands.
-
-See the spec's §14 test plan for the full matrix.
-
-## Layout
-
-| Path | What |
-|---|---|
-| `components/common` | tunnel wire format + JK BLE constants (shared) |
-| `components/jk_proto` | frame reassembly/checksum/decode; gated write builders |
-| `components/net_util` | WiFi STA + SNTP |
-| `node_a/main` | ble_owner, arbiter, decoder, tunnel_srv, mqtt, measure, supervisor |
-| `node_b/main` | tunnel_cli, adv_mgr, ble_periph (single shared table), supervisor |
-| `test_board/main` | ctl_server + emu_app + emu_bms + synth_frames |
-| `tools/bench.py` | drives the test board's serial control channel |
-
-See [SESSION_NOTES.md](SESSION_NOTES.md) for design decisions and the open-item
-tracker.
+- **No settings writes yet**: `JK_ENABLE_WRITES=0` is a hard gate.
+- **No security layer** (tunnel auth, pairing, MQTT ACLs) by owner decision:
+  remote off-grid site, radio/LAN range ⊆ physical access.
+- **Never route BMS firmware through the tunnel.**
+- The client is deliberately *gentle*: no GATT reads ever, paced reconnects,
+  nothing sent to a streaming unit (the BMS piezo-acks every command frame).
