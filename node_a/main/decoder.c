@@ -1,3 +1,4 @@
+#include <time.h>
 #include "decoder.h"
 #include "config.h"
 #include "queues.h"
@@ -9,8 +10,9 @@
 
 static const char *TAG = "decoder";
 
-/* One 0x6C stream-enable per BLE session, sent only AFTER the session's first
- * cell frame decodes. Supervisor resets the flag at link-up. */
+/* One 0x6C clock-set per BLE session (it also arms the module's stay-awake —
+ * see the block below), sent only AFTER the session's first cell frame
+ * decodes. Supervisor resets the flag at link-up. */
 static volatile bool s_stream_armed[CFG_NUM_UNITS];
 
 void decoder_session_reset(uint8_t bms_id)
@@ -39,17 +41,44 @@ static void decoder_task(void *arg)
                  * as before, just later. */
                 if (!s_stream_armed[it.bms_id]) {
                     s_stream_armed[it.bms_id] = true;
-                    static const uint8_t stream_en[20] = {
-                        0xAA,0x55,0x90,0xEB,0x6C,0x04,0xA5,0xD0,0x86,0x0C,
-                        0xBD,0x7B,0x74,0xBE,0xF7,0x38,0x11,0x9D,0xE6,0x1E };
-                    /* idx 1 = the FFE2 write-no-rsp path — the EXACT route the
-                     * app's captured 6C took through the clone. On FFE1 (idx 0,
-                     * write-with-rsp) the module C8-acks the 6C and ignores it:
-                     * the session still dies ~30 s after bootstrap (rawcap
-                     * 2026-08-29, bank 1: ack seen, 0x208 at +31 s). The
-                     * stay-awake latch appears to arm only for FFE2 commands. */
-                    arbiter_app_write(it.bms_id, 1, false, stream_en, sizeof(stream_en));
-                    ESP_LOGI(TAG, "bms %u: first cell frame — sending 6C via FFE2", it.bms_id);
+                    /* 0x6C DECODED (2026-08-29 TUN capture experiment): it is
+                     * SET-RTC — reg 6C, u32 LE seconds since 2020-01-01 00:00
+                     * AEDT (the app's epoch; offset measured against its own
+                     * frames), 9 don't-care bytes, 8-bit-sum checksum. The
+                     * old replayed constant carried a STALE morning timestamp:
+                     * banks 1/3 rejected it and slept ~25 s post-96 (their
+                     * whole "churn"), and every link-up stomped their RTCs.
+                     * A FRESH clock (the app's opener always works) doubles
+                     * as an NTP-grade RTC sync. Skip entirely until SNTP has
+                     * real time — never write a garbage clock. */
+                    time_t now = time(NULL);
+                    if (now > 1700000000) {
+                        /* Full app-style opener trilogy, ALL on FFE2 (idx 1,
+                         * write-no-rsp): the app sends 97+96+6C down FFE2 and
+                         * its sessions latch stay-awake; our FFE1-path 97/96
+                         * polls demonstrably don't (and a 6C on FFE1 is
+                         * C8-acked and ignored). The 97/96 value bytes are
+                         * buffer garbage in the app's frames — zeros here. */
+                        uint32_t jk = (uint32_t)(now - 1577797125);
+                        static const uint8_t cmds[3][2] = {
+                            {0x97,0x00}, {0x96,0x00}, {0x6C,0x04} };
+                        for (int c = 0; c < 3; c++) {
+                            uint8_t f[20] = { 0xAA,0x55,0x90,0xEB,
+                                              cmds[c][0], cmds[c][1] };
+                            if (cmds[c][0] == 0x6C) {
+                                f[6]=(uint8_t)jk;       f[7]=(uint8_t)(jk>>8);
+                                f[8]=(uint8_t)(jk>>16); f[9]=(uint8_t)(jk>>24);
+                            }
+                            uint8_t sum = 0;
+                            for (int i = 0; i < 19; i++) sum += f[i];
+                            f[19] = sum;
+                            arbiter_app_write(it.bms_id, 1, false, f, sizeof(f));
+                        }
+                        ESP_LOGI(TAG, "bms %u: first cell frame — FFE2 trilogy + clock (jk=%lu)",
+                                 it.bms_id, (unsigned long)jk);
+                    } else {
+                        s_stream_armed[it.bms_id] = false;  /* retry next frame */
+                    }
                 }
                 state_set_cells(it.bms_id, &ci);
                 mqtt_publish_cells(it.bms_id);

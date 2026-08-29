@@ -2,17 +2,74 @@
 
 Living design/status doc. Keep current alongside code changes.
 
-## READ FIRST — 2026-08-29 midday session: THE CPUAux INCIDENT + REFRAME
+## READ FIRST — 2026-08-29 EOD: APP-VIA-TUNNEL WORKS ON ALL BANKS
 
-**STATUS: BLE IS OFF and must stay off until the owner explicitly re-arms.**
-`cmd/ble on|off` now PERSISTS in NVS (default off); the 30 s auto-arm is
-REMOVED (owner-approved) — power blips no longer arm BLE. Node A healthy on
-garage power (S3, .239). Node B reflashed with the shared OTA fixes, back in
-the house. TUN clones are DARK while BLE is off (B advertises LINK_UP banks
-only) — the phone app works direct-to-unit, in garage range only. The NR
-charge-stop guard is BLIND while BLE is off (it eats our MQTT cell data).
-**iBMS + JKs are currently IGNORED by the Victron** (owner's action, see
-below) — reinstating that control loop is the owner's call, not ours.
+**STATUS: BLE ON (persisted; owner re-armed 13:05).** Victron currently
+ignores iBMS+JKs; the owner will re-enable iBMS charge control now that
+experimentation has settled. **USE CASE (owner, stated 2026-08-29): BLE is
+NOT for continuous monitoring or control — that is iBMS→CAN. The tunnel is
+for ~weekly app sessions (tweak params, view balance-wire resistance).**
+Continuous MQTT cell streaming is a nice-to-have only; the NR charge-stop
+guard gets whatever coverage falls out.
+
+**Verified live with the owner: the app works through TUN 1, 2 AND 3**
+(morning: TUN 2 only). For a bank that isn't currently latched (below), the
+TUN appears for ~25 s every ~5m20s — connect when it shows; once the app is
+on, its own traffic holds the session.
+
+### THE DECODES (owner's phone captured through the clones)
+- **0x6C = SET RTC.** u32 LE seconds since 2020-01-01 00:00 **AEDT**
+  (offset = unix − 1577797125, measured from the app's own frames), 9
+  don't-care tail bytes (the app sends recycled buffer garbage — identical
+  strings recur across commands/sessions), 8-bit-sum checksum. NOT a token.
+  No auth anywhere on this path; the PIN never appears.
+- The app opener = 97 + 96 + 6C, **all via FFE2 write-no-rsp**, value bytes
+  junk except the 6C clock. 0x67 also seen mid-session (payload zeros) —
+  purpose UNIDENTIFIED.
+- **Bug found + fixed:** our old replayed 6C wrote a STALE timestamp into
+  every bank's RTC at every link-up. Now built fresh from SNTP (skipped
+  until time is valid) — every link-up NTP-syncs the BMS clock instead.
+
+### THE SLEEP/LATCH MODEL (final; replaces BOTH earlier reframes)
+- Modules sleep their BLE ~25 s after the last received command; their own
+  notify stream does NOT count as activity. Sleep = radio off → our 0x208.
+  That is ALL the "churn"/"dormancy"/"crash-loop" ever was.
+- A **stay-awake latch** exists but is **FLAKY per-session with per-unit
+  tendencies**: bank 3 latches readily (held hours), bank 2 sometimes
+  (immortal for DAYS pre-14:09, then mortal, then 12+ min unassisted at
+  15:11), bank 1 never today (22–46 s always — even the APP's own opener
+  failed to hold it once, 14:26). Identical fw 19.31, identical settings
+  (owner compared pages: no BLE settings exist; Smart Sleep identical and
+  unused). It is transient aux-CPU state. "Crown bank" = whoever latched
+  last. Falsified en route: keepalive reads (removal changed nothing), conn
+  latency (moot — module renegotiates to native 20 ms/0/6 s), RSSI
+  (ANTI-correlates), per-unit 6C tokens (no tokens exist), settings deltas.
+  esphome-jk-bms issue #732 = the same endemic behavior.
+- Our opener now mimics the app: 97/96/6C all via FFE2, fresh clock,
+  sequenced after the session's first cell frame (the FFE1 polls at link-up
+  still elicit those first frames).
+
+### NODE-A LEADS (real, next session)
+Duplicate llevent "connect" events (2–3 for one link, no disconnect between)
+correlate with bank 1 going UNREACHABLE-while-advertising at ~14:50 — a node
+A reboot cleared it instantly (owner suggested it; confirmed). Suspect ghost
+conn state in the NimBLE controller. Related oddity: one 3 s reconnect
+bypassed the 300 s hold (15:11:13).
+
+### Client profile (deployed)
+NO GATT reads ever (bridge/ka = passive vitals {links,rssi{bank:dBm},up}).
+3-regime reconnect pacing on session end: stable ≥10 min → prompt;
+short-but-STREAMED → fixed 300 s hold; short-and-silent → 60 s→10 min
+ladder. App/NR traffic bypasses holds. Latched banks stream continuously;
+mortal banks give ~22 s snapshots every ~5m20s (a few beeps per cycle in the
+garage — tune CFG_RECONNECT_HOLD_PROD_S if annoying). iBMS clean ALL day
+(bitmask 0, no crash); node A internals solid (imin ~96.6 K, ota:1).
+
+### Open threads
+(1) Why/when the latch takes (rawcap matrix; app-direct vs clone timing).
+(2) Bank-1 ghost-connect NimBLE lead + the hold-bypass reconnect.
+(3) Unit 0 (Telink) never streams. (4) Owner re-enables iBMS charge control.
+(5) GitHub upload. (6) O-2/O-5 writes (JK_ENABLE_WRITES stays 0).
 
 ### The incident (11:42–12:20)
 Bank 3's JK latched **"CPUAux error"** (per-bank errors_bitmask 4) at 11:44,
