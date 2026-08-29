@@ -2,6 +2,86 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## READ FIRST — 2026-08-29 midday session: THE CPUAux INCIDENT + REFRAME
+
+**STATUS: BLE IS OFF and must stay off until the owner explicitly re-arms.**
+`cmd/ble on|off` now PERSISTS in NVS (default off); the 30 s auto-arm is
+REMOVED (owner-approved) — power blips no longer arm BLE. Node A healthy on
+garage power (S3, .239). Node B reflashed with the shared OTA fixes, back in
+the house. TUN clones are DARK while BLE is off (B advertises LINK_UP banks
+only) — the phone app works direct-to-unit, in garage range only. The NR
+charge-stop guard is BLIND while BLE is off (it eats our MQTT cell data).
+**iBMS + JKs are currently IGNORED by the Victron** (owner's action, see
+below) — reinstating that control loop is the owner's call, not ours.
+
+### The incident (11:42–12:20)
+Bank 3's JK latched **"CPUAux error"** (per-bank errors_bitmask 4) at 11:44,
+minutes after a fresh BLE re-bootstrap from our node. The iBMS relayed it as
+"B:3 Internal BMS fault", itself crashed + rebooted (11:42–11:45), came up
+alarm-latched with CAN CCL/DCL=0 → **the inverter dropped house AC**. Owner
+restored power by removing the iBMS from Victron control; bank 3's fault
+cleared only by power-cycling that unit (fuse pull). All four banks verified
+healthy throughout via the .5 archive (`~/bms-history/bms.db`, ts in UTC,
+per-bank `errors_bitmask` in pack_readings). iBMS reboot tally: 3 on our two
+garage-BLE days vs 1 in the prior ten — correlation, though the 08-18 reboot
+proves it can also fall over on its own.
+
+### THE REFRAME (invalidates the "dormancy" framing)
+The JK-PB's **aux CPU IS the BLE/RS485 bridge MCU**. Working model now: our
+client pattern (hours-held links + 15 s keepalive GATT reads + bootstrap
+storms) **crash-loops the aux CPU** — the ~30 s 0x208 "dormancy" churn was
+watchdog resets, the per-bank stable/churny gradient is per-unit tolerance,
+bank 3's latched fault was an escalation of the same, and the iBMS crashes
+are plausibly collateral (garbled RS485 from a crashing bridge hitting a
+fragile parser). The phone app never does any of this — which is why it
+never hurt anything. Disproven along the way: 6C-at-linkup timing, 6C via
+FFE2 (kept anyway — it's the app's own path), "app session latches the
+module", "keepalive read is life support" (the proc-pool starvation WAS real
+and fixed, but reads don't keep modules alive — they may be a crash driver).
+
+### Real bugs found + fixed today (ALL deployed to A; B has the OTA fixes)
+1. Resync tail-drop: announce = 9 frames into an 8-deep silent-drop queue on
+   the tunnel task → queue 24 + WARN on drop + 30 s IDENT+LINK refresh; B
+   advertises LINK_UP-only (killed the "TUN 0+2 only" ghost). (878653c)
+2. NimBLE GATT proc pool 4→16; keepalive never stacks (ka_pending), every rc
+   checked; per-cycle vitals on `jkbms/bridge/ka` incl. per-bank link RSSI.
+3. OTA overhaul: `ota_start` moved BEFORE NimBLE (it lost the boot resource
+   race, bound the port, failed task-create, LEAKED the listener → phantom
+   accepts-but-never-serves + EADDRINUSE forever); supervisor retries;
+   bounded recv timeouts (half-open upload wedged httpd for a boot);
+   esp_timer reboot (xTaskCreate reboots failed silently under RAM
+   exhaustion); `ota` flag in health. Verified end-to-end over the air.
+4. Internal-RAM starvation (the soil under #3): health `imin` hit **23
+   bytes** with BLE armed. ALWAYSINTERNAL 8192→512, reserve 64→128 K, NimBLE
+   heap → PSRAM. Now ifree ≈100 K, imin ≈95 K. Health carries ifree/imin.
+5. BLE switch NVS-persisted, auto-arm removed. (4c53642, 98461c8, 459ca59)
+
+### NEXT SESSION — design the GENTLE CLIENT before any re-arm
+1. Research first: esphome-jk-bms runs JK-PB over BLE 24/7 at scale — pin
+   down its session profile (no GATT reads? conn params? reconnect cadence?)
+   as the known-survivable reference. We already know: it writes 0x96 on
+   FFE1 write-no-rsp and simply re-kicks when the stream stalls.
+2. Candidate profile: NO keepalive reads; connect, bootstrap 97/96(/6C),
+   stream until the aux CPU resets, reconnect with LONG backoff (minutes,
+   not seconds); no re-arm storms.
+3. Canary rollout: ONE bank (not bank 3), watching `bridge/ka` RSSI,
+   llevent, and the iBMS per-bank errors_bitmask (the archive poller is the
+   tripwire). Escalate to more banks only after a clean multi-hour soak.
+   **Owner go/no-go gates every step.**
+4. Still open behind that: unit 0 (Telink) never streams; O-2/O-5 writes
+   (JK_ENABLE_WRITES stays 0); GitHub upload.
+
+### Ops crib (current)
+- OTA: `tools/ota_push.py a|b --host <ip>` (A=192.168.3.239 garage,
+  B=192.168.3.234 house). Self-healing now; `ota:1` in health = serving.
+  Preflight can false-fail on WiFi power-save latency — just retry.
+- BLE: `jkbms/bridge/cmd/ble on|off` — persists across power cycles.
+- Vitals: `bridge/health` {heap,min_heap,ifree,imin,rssi,up,ota,ble,conn,
+  disc}; `bridge/ka` {ok,skip,err,rssi{bank:dBm}}; `bridge/llevent`.
+- Archive on .5: `~/bms-history/bms.db` (UTC!); iBMS read-only at
+  `192.168.3.90/api` (top-level `bms_num` is NOT a bank count — use
+  modules_online/offline; per-bank faults in pack_readings.errors_bitmask).
+
 ## Where things stand (2026-08-24)
 
 Implementation of `jk-ble-tunnel-spec.md` rev 3. **All three projects build clean
@@ -145,7 +225,7 @@ LL event counters. Findings, in discovery order:
 currently the test board): dual-core kills the contention class, PSRAM kills
 the heap class. The codebase already builds for esp32s3.
 
-## MISSION COMPLETE + DORMANCY HUNT PENDING (2026-08-29, session end)
+## [SUPERSEDED by READ FIRST above] MISSION COMPLETE + DORMANCY HUNT PENDING (2026-08-29 morning)
 
 **Delivered & in production:** JK app works FROM THE HOUSE on TUN 1 & 2
 clones with live garage-bank data (spec's core promise). 3-bank fleet
@@ -161,7 +241,7 @@ third command, captured through the transparent clone — replayed verbatim,
 "flaky" bank 1 and "never-arms" bank 3 instantly. The BMS piezo-acks
 EVERY command frame — a streaming unit must hear NOTHING (silent-client).
 
-## NEXT SESSION — THE DORMANCY HUNT (all remote)
+## [SUPERSEDED — "dormancy" reframed as aux-CPU crash loops; see READ FIRST] NEXT SESSION — THE DORMANCY HUNT
 1. **0x208 cycle persists on some boots despite 6C** (~1 drop/30 s, one or
    two banks; TUN_3 flickers in house scans when bank 3 is the victim).
    Suspects: 6C delivery timing/ordering on link-up (raw write races the
