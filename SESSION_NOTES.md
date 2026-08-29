@@ -133,7 +133,9 @@ garage — tune CFG_RECONNECT_HOLD_PROD_S if annoying). iBMS clean ALL day
     verify TUN-0 app session end-to-end; does this module sleep/latch at all
     (6+ min unbroken on first contact + AT heartbeat suggest it never dozes)?
 (4) Owner re-enables iBMS charge control.
-(5) GitHub upload. (6) O-2/O-5 writes — SCHEDULED next session (owner,
+(5) ~~GitHub upload~~ DONE: private repo svwhisper/jk-ble-tunnel
+    (2026-08-29; docs/SPEC.md = canonical spec now). (6) O-2/O-5 writes —
+    SCHEDULED next session (owner,
     2026-08-29): "tomorrow, we will get settings write enabled".
 (Resolved 08-29: duplicate TUN-3 advert after ~6 A-reboots — gone after a
 Node B restart + app restart; recurrence would point at B's adv-set table.)
