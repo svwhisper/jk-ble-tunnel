@@ -688,14 +688,27 @@ static void exec_request(const bms_request_t *req)
             respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
         break;
     }
-    case TXN_BALANCE_WRITE:
+    case TXN_BALANCE_WRITE: {
         /* Reaches here only if JK_ENABLE_WRITES built the frame (else the
-         * arbiter never enqueued it). Same write path as RAW_WRITE. */
-        l->txn_active = true; l->txn = *req;
-        l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
-        ble_gattc_write_flat(l->conn_handle, l->val_handle, req->payload,
-                             req->payload_len, on_gatt_write_done, NULL);   /* NIMBLE-PASS */
+         * arbiter never enqueued it). Settings writes go to FFE2 — the app's
+         * command channel — NOT FFE1, and use the op the char's discovered
+         * props permit (write-no-rsp on the C8:47:80 trio, write-with-rsp on
+         * unit 0's Telink module). FFE2 write-no-rsp has no ATT ack, so the
+         * arbiter confirms by settings readback (§10), not by write status. */
+        if (!l->ffe2_handle) {
+            respond(req->bms_id, req->cmd_id, RESP_GATT_ERR, NULL, 0, JK_REC_NONE);
+            break;
+        }
+        int wrc = ffe2_needs_write_req(l)
+                ? ble_gattc_write_flat(l->conn_handle, l->ffe2_handle,
+                                       req->payload, req->payload_len, NULL, NULL)
+                : ble_gattc_write_no_rsp_flat(l->conn_handle, l->ffe2_handle,
+                                              req->payload, req->payload_len); /* NIMBLE-PASS */
+        if (wrc) ESP_LOGW(TAG, "balance write bms %u rc=%d", req->bms_id, wrc);
+        respond(req->bms_id, req->cmd_id, wrc ? RESP_GATT_ERR : RESP_OK,
+                NULL, 0, JK_REC_NONE);
         break;
+    }
     default: break;
     }
     xSemaphoreGive(s_mtx_link_pool);

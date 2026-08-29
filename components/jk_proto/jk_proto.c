@@ -251,18 +251,51 @@ int jk_build_read_cmd(uint8_t opcode, uint8_t *out, size_t out_cap)
     return JK_CMD_FRAME_LEN;
 }
 
+/* Settings-register map — DECODED from the official app's own write frames,
+ * captured through the transparent clones on a live JK-PB2A16S20P (fw 19.31),
+ * 2026-08-30. Each write is the universal 20-byte register frame:
+ *   AA 55 90 EB | reg | 0x04 | u32 LE value | 8 don't-care bytes | 8-bit sum
+ * (same shape as the 0x6C set-RTC), sent to FFE2. The `scale` turns the
+ * whitelist's human unit (V, A, bool) into the register's integer unit. */
+typedef struct { const char *key; uint8_t reg; double scale; } jk_setting_reg_t;
+static const jk_setting_reg_t JK_SETTING_REGS[] = {
+    { "balance_trigger_voltage", 0x06, 1000.0 },  /* millivolts (a DELTA, not absolute) */
+    { "balance_current",         0x13, 1000.0 },  /* milliamps                          */
+    { "balancing_enabled",       0x1F,    1.0 },  /* 0/1                                 */
+};
+#define JK_SETTING_REGS_N (sizeof(JK_SETTING_REGS)/sizeof(JK_SETTING_REGS[0]))
+
 int jk_build_balance_write(jk_frame_ver_t ver, const char *key, double value,
                            uint8_t *out, size_t out_cap)
 {
-    (void)ver; (void)key; (void)value; (void)out; (void)out_cap;
+    (void)ver;   /* register map is identical across the fleet's frame versions */
 #if JK_ENABLE_WRITES
-    /*
-     * PORT ME (O-2): build the settings-write frame for `key` using the
-     * reference write-frame opcode/format. Enforce the §10 whitelist upstream
-     * in the arbiter; this builder only serialises an already-validated write.
-     */
-#error "JK_ENABLE_WRITES=1 but jk_build_balance_write is not ported yet (O-2)."
+    if (out_cap < JK_CMD_FRAME_LEN) return -1;
+    const jk_setting_reg_t *r = NULL;
+    for (size_t i = 0; i < JK_SETTING_REGS_N; i++)
+        if (strcmp(JK_SETTING_REGS[i].key, key) == 0) { r = &JK_SETTING_REGS[i]; break; }
+    if (!r) return -1;   /* not a known register — the §10 whitelist gates this too */
+
+    /* Scale to the register's integer unit; round to nearest, reject negatives
+     * and anything that would overflow u32 (the arbiter range-clamps first, so
+     * this is defense in depth). */
+    double scaled = value * r->scale;
+    if (scaled < 0.0 || scaled > 4294967295.0) return -1;
+    uint32_t iv = (uint32_t)(scaled + 0.5);
+
+    memset(out, 0, JK_CMD_FRAME_LEN);
+    memcpy(out, JK02_CMD_MAGIC, 4);
+    out[4] = r->reg;
+    out[5] = 0x04;                       /* value length, per the app's frames  */
+    out[6] = (uint8_t)iv;        out[7] = (uint8_t)(iv >> 8);
+    out[8] = (uint8_t)(iv >> 16); out[9] = (uint8_t)(iv >> 24);
+    /* bytes 10..18 left zero (the app sends recycled buffer junk; zero works). */
+    uint8_t sum = 0;
+    for (int i = 0; i < JK_CMD_FRAME_LEN - 1; i++) sum += out[i];
+    out[JK_CMD_FRAME_LEN - 1] = sum;
+    return JK_CMD_FRAME_LEN;
 #else
+    (void)key; (void)value; (void)out; (void)out_cap;
     return -1; /* ENOTSUP: writes disabled until bench-verified. */
 #endif
 }
@@ -270,9 +303,9 @@ int jk_build_balance_write(jk_frame_ver_t ver, const char *key, double value,
 int jk_build_login(const char *pin, uint8_t *out, size_t out_cap)
 {
     (void)pin; (void)out; (void)out_cap;
-#if JK_ENABLE_WRITES
-#error "JK_ENABLE_WRITES=1 but jk_build_login is not ported yet (O-5)."
-#else
-    return -1;
-#endif
+    /* No-op by design: captures of the app's full settings-write sessions on
+     * fw 19.31 show NO login/auth frame on the wire — the PIN never appears
+     * (the app's password prompt is a local UI gate). Kept as a stub so the
+     * arbiter's optional login step compiles; returns "nothing to send". */
+    return 0;
 }

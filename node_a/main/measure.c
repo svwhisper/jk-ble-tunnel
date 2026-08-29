@@ -24,7 +24,7 @@ bool measure_active(uint8_t *out) { if (out) *out = s_bms; return s_active; }
  * lowered either, so there is nothing to undo. */
 static void restore_settings(uint8_t bms_id, const uint8_t *raw, uint16_t len)
 {
-#if JK_ENABLE_WRITES
+#if JK_ENABLE_MEASURE_WRITES
     /* PORT ME (O-2): push `raw` back as a settings write via the arbiter. */
     (void)raw; (void)len;
     ESP_LOGW(TAG, "restore bms %u settings (%u bytes)", bms_id, len);
@@ -71,14 +71,14 @@ static void run_sequence(uint8_t bms_id, const char *cid)
     memcpy(rec.saved, st.settings.raw, st.settings.raw_len);
     nvs_put_meas(&rec);
 
-#if !JK_ENABLE_WRITES
-    /* Writes disabled: cannot lower the floor, so abort cleanly. The NVS record
+#if !JK_ENABLE_MEASURE_WRITES
+    /* Measurement writes disabled: cannot lower the floor, so abort cleanly. The NVS record
      * we just wrote is cleared here; boot-restore covers the crash window. */
     nvs_clear_meas();
     mqtt_ack(bms_id, "measure", cid, "write_path_disabled", NULL, NULL);
     s_active = false;
     return;
-#else
+#else /* JK_ENABLE_MEASURE_WRITES */
     /* 2. balance current -> floor, balancing enabled. (PORT ME O-2)          */
     /* 3. OPTIONAL cell-count re-init behind CFG_MEAS_CELLCOUNT_TOGGLE (O-4).  */
     vTaskDelay(pdMS_TO_TICKS(CFG_MEAS_SETTLE_MS));   /* 4. settle              */

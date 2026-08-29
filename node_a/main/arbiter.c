@@ -6,6 +6,7 @@
  * onto g_q_arb_in.
  */
 #include <string.h>
+#include <math.h>
 #include "arbiter.h"
 #include "queues.h"
 #include "config.h"
@@ -20,8 +21,26 @@
 static const char *TAG = "arbiter";
 
 /* ---- inbound message union --------------------------------------------- */
-typedef enum { ARB_REQ, ARB_APP_CONN, ARB_MQTT, ARB_CLEAR } arb_kind_t;
+typedef enum { ARB_REQ, ARB_APP_CONN, ARB_MQTT, ARB_CLEAR, ARB_SETTINGS } arb_kind_t;
 typedef enum { MQTT_BALANCE, MQTT_MEASURE, MQTT_REFRESH } arb_mqtt_t;
+
+/* ---- balance-write readback (§10) --------------------------------------- */
+/* A settings write to FFE2 gets no ATT ack (write-no-rsp on the majority
+ * module), and the BMS pushes fresh settings frames only sparsely — so the
+ * arbiter confirms a write by actively re-reading and comparing the target
+ * key against the next decoded settings frame, within a deadline. */
+typedef struct {
+    bool     active;
+    uint8_t  which;          /* 0=trigger_v, 1=current_a, 2=enabled */
+    double   target;         /* value in human units, for the compare */
+    char     key[28];
+    char     cid[32];
+    int64_t  deadline_us;    /* hard: past this, ack written_unverified */
+    int64_t  next_nudge_us;  /* when to issue the next settings re-read */
+    uint8_t  nudges;         /* re-read polls issued so far (capped) */
+} rb_t;
+static rb_t s_rb[CFG_NUM_UNITS];
+static int64_t s_last_write_us[CFG_NUM_UNITS];   /* debounce, set on submit */
 
 typedef struct {
     arb_kind_t kind;
@@ -145,20 +164,25 @@ static void handle_balance_set(uint8_t id, const char *json, const char *cid)
     cJSON *root = cJSON_Parse(json);
     if (!root) { mqtt_ack(id, "balance/set", cid, "bad_json", NULL, NULL); return; }
 
-    /* 1. whitelist + 2. range clamp — reject the whole command on any miss. */
-    cJSON *it;
-    cJSON_ArrayForEach(it, root) {
-        const cfg_range_t *rg = whitelist_lookup(it->string);
-        if (!rg) {
-            mqtt_ack(id, "balance/set", cid, "rejected_out_of_scope", it->string, NULL);
-            cJSON_Delete(root); return;
-        }
-        double v = cJSON_IsBool(it) ? (cJSON_IsTrue(it) ? 1 : 0) : it->valuedouble;
-        if (v < rg->min || v > rg->max) {
-            ESP_LOGW(TAG, "range reject %s=%f", it->string, v);
-            mqtt_ack(id, "balance/set", cid, "out_of_range", it->string, NULL);
-            cJSON_Delete(root); return;
-        }
+    /* One register per command (the app writes one register per frame, and a
+     * single-key command keeps readback unambiguous). Reject multi-key. */
+    if (!root->child || root->child->next) {
+        mqtt_ack(id, "balance/set", cid, "one_key_per_command", NULL, NULL);
+        cJSON_Delete(root); return;
+    }
+
+    /* 1. whitelist + 2. range clamp. */
+    cJSON *it = root->child;
+    const cfg_range_t *rg = whitelist_lookup(it->string);
+    if (!rg) {
+        mqtt_ack(id, "balance/set", cid, "rejected_out_of_scope", it->string, NULL);
+        cJSON_Delete(root); return;
+    }
+    double v = cJSON_IsBool(it) ? (cJSON_IsTrue(it) ? 1 : 0) : it->valuedouble;
+    if (v < rg->min || v > rg->max) {
+        ESP_LOGW(TAG, "range reject %s=%f", it->string, v);
+        mqtt_ack(id, "balance/set", cid, "out_of_range", it->string, NULL);
+        cJSON_Delete(root); return;
     }
 
     /* Arbitration (§10): app takes precedence. */
@@ -169,34 +193,124 @@ static void handle_balance_set(uint8_t id, const char *json, const char *cid)
         cJSON_Delete(root); return;
     }
 
-    /* 6. rate limit. */
-    bms_runtime_t rt; state_get_runtime(id, &rt);
-    if (CFG_BALANCE_RATE_PER_CYCLE && rt.writes_this_cycle >= CFG_BALANCE_RATE_PER_CYCLE) {
+    /* 6. rate limit — a minimum interval between writes per unit (debounce
+     * against rapid-fire / accidental double-writes). Replaces the original
+     * "one per charge cycle" counter: writes are occasional human operator
+     * commands, not an automation loop, and per-cycle needed a charge-cycle
+     * detector that never existed (the counter had no reset → a permanent
+     * lock after the first write). */
+    if (s_last_write_us[id] &&
+        esp_timer_get_time() - s_last_write_us[id] < CFG_BALANCE_MIN_INTERVAL_MS * 1000LL) {
         mqtt_ack(id, "balance/set", cid, "rate_limited", NULL, NULL);
         cJSON_Delete(root); return;
     }
 
-    /* 3/5. Build login + write frame. GATED: returns -1 until O-2/O-5 ported. */
+    /* 3/5. Build the write frame (no login: fw 19.31 needs none on the wire,
+     * confirmed by capture). Register map lives in jk_proto (decoded from the
+     * app's own frames). */
     uint8_t frame[JK_FRAME_MAX];
-    cJSON *first = root->child;
-    double v = cJSON_IsBool(first) ? (cJSON_IsTrue(first) ? 1 : 0) : first->valuedouble;
-    int n = jk_build_balance_write(JK_FRAME_JK02_32S, first->string, v,
+    int n = jk_build_balance_write(JK_FRAME_JK02_32S, it->string, v,
                                    frame, sizeof(frame));
     if (n < 0) {
-        /* Honest: the write path is compile-disabled until bench-verified. */
-        mqtt_ack(id, "balance/set", cid, "write_path_disabled", first->string, NULL);
+        mqtt_ack(id, "balance/set", cid, "write_path_disabled", it->string, NULL);
         cJSON_Delete(root); return;
     }
 
-    /* Enqueue the validated write; readback happens in the response handler. */
+    /* Enqueue the validated write to FFE2. */
     bms_request_t req = { .bms_id = id, .kind = TXN_BALANCE_WRITE, .source = SRC_MQTT,
                           .with_response = true, .response_needed = true,
                           .timeout_ms = 3000, .payload_len = (uint8_t)n };
     memcpy(req.payload, frame, n);
     arbiter_submit(&req);
-    /* NOTE: on the response, re-read settings, compare, publish readback,
-     * update retained state/settings + push READ_CACHE, bump writes_this_cycle. */
+    s_last_write_us[id] = esp_timer_get_time();   /* debounce from submit time */
+
+    /* Arm the readback: FFE2 gives no ATT ack, so confirm by comparing the
+     * next decoded settings frame against the target. */
+    rb_t *rb = &s_rb[id];
+    rb->active = true;
+    rb->which  = !strcmp(it->string, "balance_current") ? 1
+               : !strcmp(it->string, "balancing_enabled") ? 2 : 0;
+    rb->target = v;
+    strlcpy(rb->key, it->string, sizeof(rb->key));
+    strlcpy(rb->cid, cid ? cid : "", sizeof(rb->cid));
+    /* Generous window: a write to a sleeping bank waits for dispatch to raise
+     * the link (~5 s connect+discovery) before the frame is even sent, then a
+     * settings frame must arrive. 15 s covers a cold-link start. */
+    int64_t nw = esp_timer_get_time();
+    rb->deadline_us   = nw + 15000000LL;
+    rb->next_nudge_us = nw + 5000000LL;   /* first re-read at ~5 s (post-write) */
+    rb->nudges = 0;
+    ESP_LOGI(TAG, "bms %u balance write %s=%.3f (%d bytes), readback armed",
+             id, it->string, v, n);
     cJSON_Delete(root);
+}
+
+/* Compare a decoded settings snapshot to the armed target; publish the ack. */
+static void rb_finish(uint8_t id, const char *status, double readval)
+{
+    rb_t *rb = &s_rb[id];
+    char rbjson[64];
+    snprintf(rbjson, sizeof(rbjson), "{\"%s\":%.3f}", rb->key, readval);
+    mqtt_ack(id, "balance/set", rb->cid[0] ? rb->cid : NULL, status, rb->key, rbjson);
+    rb->active = false;
+}
+
+static void rb_on_settings(uint8_t id)
+{
+    rb_t *rb = &s_rb[id];
+    if (!rb->active) return;
+    bms_state_t st;
+    if (!state_snapshot(id, &st) || !st.have_settings) return;
+    double got = rb->which == 1 ? st.settings.balance_current_a
+               : rb->which == 2 ? (st.settings.balancing_enabled ? 1.0 : 0.0)
+               : st.settings.balance_trigger_v;
+    /* Tolerance: half the register's least count (0.5 mV / 0.5 mA), booleans exact. */
+    double tol = rb->which == 2 ? 0.5 : 0.0005;
+    /* Only a MATCH is definitive. A mismatch is ignored, not failed: a settings
+     * frame can arrive between arming and the write actually landing (the write
+     * may wait ~5 s for an idle link to connect), and that pre-write frame
+     * carries the OLD value — failing on it is a false negative (seen live
+     * 2026-08-30). The deadline nudge forces a post-write frame; if none ever
+     * matches, rb_tick reports written_unverified. */
+    if (fabs(got - rb->target) <= tol) {
+        rb_finish(id, "ok", got);
+        ESP_LOGI(TAG, "bms %u readback OK %s=%.3f", id, rb->key, got);
+    } else {
+        ESP_LOGD(TAG, "bms %u readback frame pre-write? %s=%.3f (want %.3f), waiting",
+                 id, rb->key, got, rb->target);
+    }
+}
+
+/* Deadline sweep (called each task tick): nudge a re-read at the half-way
+ * point, and give up honestly after the deadline. */
+static void rb_tick(void)
+{
+    int64_t now = esp_timer_get_time();
+    for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
+        rb_t *rb = &s_rb[id];
+        if (!rb->active) continue;
+        /* Re-read to force a fresh settings frame, spaced every ~4 s (capped),
+         * so at least one poll lands AFTER the write completes whether the link
+         * started held (write instant) or idle (~5 s to connect first). Cell-
+         * info (0x96), NOT device-info: only a 0x96 poll reliably elicits a
+         * fresh settings (0x01) frame on fw 19.31 — proven live 2026-08-30
+         * (cmd/refresh uses 0x96 and self-confirmed a readback that a 0x97
+         * nudge had missed). */
+        if (rb->nudges < 3 && now > rb->next_nudge_us) {
+            rb->nudges++;
+            rb->next_nudge_us = now + 4000000LL;
+            arbiter_poll(id, JK_CMD_CELL_INFO);
+        }
+        if (now > rb->deadline_us) {
+            /* The write was sent; we just never saw a confirming frame in time.
+             * Don't claim success or failure — the next periodic settings frame
+             * updates retained state/settings regardless. */
+            mqtt_ack(id, "balance/set", rb->cid[0] ? rb->cid : NULL,
+                     "written_unverified", rb->key, NULL);
+            rb->active = false;
+            ESP_LOGW(TAG, "bms %u readback timed out (%s)", id, rb->key);
+        }
+    }
 }
 
 /* ---- response routing --------------------------------------------------- */
@@ -317,6 +431,11 @@ void arbiter_clear_pending(uint8_t id)
     arb_msg_t m = { .kind = ARB_CLEAR, .bms_id = id };
     arb_in_send(&m);
 }
+void arbiter_notify_settings(uint8_t id)
+{
+    arb_msg_t m = { .kind = ARB_SETTINGS, .bms_id = id };
+    arb_in_send(&m);
+}
 static void submit_mqtt(uint8_t id, arb_mqtt_t t, const char *json, const char *cid)
 {
     arb_msg_t m = { .kind = ARB_MQTT, .bms_id = id };
@@ -359,6 +478,9 @@ static void arbiter_task(void *arg)
                     pc->head = pc->tail = pc->count = 0;
                     break;
                 }
+                case ARB_SETTINGS:
+                    rb_on_settings(msg.bms_id);   /* balance-write readback (§10) */
+                    break;
                 case ARB_MQTT:
                     if (msg.mqtt.type == MQTT_BALANCE)
                         handle_balance_set(msg.bms_id, msg.mqtt.json, msg.mqtt.id);
@@ -380,6 +502,7 @@ static void arbiter_task(void *arg)
             on_response(&rsp);
         }
         check_link_guards();
+        rb_tick();                 /* balance-write readback deadlines (§10) */
         /* Retry gated/pending work even when no message arrives (the select
          * timeout above bounds this to every 500 ms). Cheap: dispatch() is a
          * no-op for idle or gated units. Parked units (NULL name in CFG_BMS)

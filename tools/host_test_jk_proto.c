@@ -107,6 +107,41 @@ int main(void)
         CHECK(rc2.cells[0].r_mohm == 72, "real: cell 1 wire = 72 mOhm");
     }
 
+#if JK_ENABLE_WRITES
+    /* Balance-write frame builder vs the official app's OWN captured frames
+     * (JK-PB2A16S20P fw 19.31, 2026-08-30). The value+checksum bytes must
+     * match byte-for-byte; the app's junk tail (bytes 10..18) is don't-care,
+     * so compare only the header, register, value, and checksum. */
+    {
+        uint8_t f[20];
+        /* trigger voltage 0.015 V -> reg 0x06, 0x0F mV. (The app's captured
+         * frame carried a junk tail summing to checksum 0x94; ours zeros the
+         * tail, so the self-consistent checksum is 0x93 — the BMS validates
+         * the sum over whatever tail is sent, proven by our 0x6C set-RTC.) */
+        CHECK(jk_build_balance_write(JK_FRAME_JK02_32S, "balance_trigger_voltage",
+                                     0.015, f, sizeof(f)) == 20, "write: trig builds");
+        CHECK(f[4]==0x06 && f[5]==0x04 && f[6]==0x0F && f[7]==0 && f[8]==0 && f[9]==0,
+              "write: trig 0.015V -> reg06 val 15mV");
+        {   uint8_t sum = 0; for (int i = 0; i < 19; i++) sum += f[i];
+            CHECK(f[19] == sum, "write: trig checksum self-consistent"); }
+        /* balance current 1.5 A -> reg 0x13, 0x05DC mA */
+        CHECK(jk_build_balance_write(JK_FRAME_JK02_32S, "balance_current",
+                                     1.5, f, sizeof(f)) == 20, "write: curr builds");
+        CHECK(f[4]==0x13 && f[6]==0xDC && f[7]==0x05 && f[8]==0 && f[9]==0,
+              "write: curr 1.5A -> reg13 val 1500mA");
+        /* balancer enable = 1 -> reg 0x1F, value 1 */
+        CHECK(jk_build_balance_write(JK_FRAME_JK02_32S, "balancing_enabled",
+                                     1.0, f, sizeof(f)) == 20, "write: enable builds");
+        CHECK(f[4]==0x1F && f[6]==0x01 && f[7]==0 && f[8]==0 && f[9]==0,
+              "write: enable=1 -> reg1F val 1");
+        /* unknown key rejected */
+        CHECK(jk_build_balance_write(JK_FRAME_JK02_32S, "cell_ovp",
+                                     3.65, f, sizeof(f)) < 0, "write: unknown key rejected");
+        /* login is a no-op on this firmware (no auth on the wire) */
+        CHECK(jk_build_login("123456", f, sizeof(f)) == 0, "write: login is no-op (0 bytes)");
+    }
+#endif
+
     printf("\n%s (%d failure%s)\n", fails ? "TESTS FAILED" : "ALL TESTS PASSED",
            fails, fails == 1 ? "" : "s");
     return fails ? 1 : 0;

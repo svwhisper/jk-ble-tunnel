@@ -70,7 +70,6 @@ typedef struct {
     int64_t  last_seen_us;           /* last good frame                      */
     int64_t  app_left_us;            /* for idle-disconnect timer            */
     bool     meas_in_progress;
-    uint8_t  writes_this_cycle;      /* balance write rate limit (§10)       */
 } bms_runtime_t;
 
 /* Fan-out notification item (ble_owner -> tunnel_srv and -> decoder).

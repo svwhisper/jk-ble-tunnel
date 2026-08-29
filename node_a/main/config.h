@@ -105,22 +105,30 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = { FLEET_BMS_TABLE };
 /* Per-key range clamps. Reject (never silently clamp) out-of-range. Values
  * are placeholders — set to the safe envelope for your cells (EVE MB31). */
 typedef struct { const char *key; double min; double max; } cfg_range_t;
+/* Ranges in the whitelist's human units. CORRECTED 2026-08-30 from live app
+ * captures: balance_trigger_voltage is a DELTA (the app showed 0.010 V), not
+ * an absolute cell voltage; and the PB2A16S20P balances up to 2 A. */
 static const cfg_range_t CFG_BALANCE_RANGE[] = {
-    { "balance_trigger_voltage", 3.30, 3.60 },
-    { "balance_current",         0.10, 1.00 },
-    { "balancing_enabled",       0.0,  1.0  },
+    { "balance_trigger_voltage", 0.003, 0.100 },  /* volts, delta */
+    { "balance_current",         0.10,  2.00  },  /* amps         */
+    { "balancing_enabled",       0.0,   1.0   },  /* bool         */
 };
 #define CFG_BALANCE_RANGE_N (sizeof(CFG_BALANCE_RANGE)/sizeof(CFG_BALANCE_RANGE[0]))
 
 #define CFG_ARB_MODE_QUEUE       0   /* 0=block automation writes while app active,
                                         1=queue to apply on app disconnect (§10)  */
-#define CFG_BALANCE_RATE_PER_CYCLE 1 /* default: one balance write per charge cycle */
+#define CFG_BALANCE_MIN_INTERVAL_MS 3000 /* debounce: min gap between writes/unit */
 
 /* ---- Measurement mode (spec §9) ----------------------------------------- */
 #define CFG_MEAS_SETTLE_MS       20000
 #define CFG_MEAS_TIMEOUT_MS      120000  /* supervisor hard restore; settle < this */
 #define CFG_MEAS_BALANCE_FLOOR_A 0.30
 #define CFG_MEAS_CELLCOUNT_TOGGLE 0      /* O-4: default OFF until firmware-verified */
+/* Measurement mode's own write steps (floor-lower + restore) are a SEPARATE,
+ * still-unported capability (O-2 measurement half: step 2 floor write and the
+ * NVS-raw restore are not built). Balance writes (JK_ENABLE_WRITES) are live,
+ * but cmd/measure stays honestly disabled until this is 1. */
+#define JK_ENABLE_MEASURE_WRITES 0
 
 /* Compile-time guard for the §9 assertion (settle < timeout). */
 _Static_assert(CFG_MEAS_SETTLE_MS < CFG_MEAS_TIMEOUT_MS,

@@ -92,6 +92,7 @@ static void decoder_task(void *arg)
             if (jk_decode_settings(ver, it.data, it.len, &s) == 0) {
                 state_set_settings(it.bms_id, &s);
                 mqtt_publish_settings(it.bms_id);   /* retained (spec §7) */
+                arbiter_notify_settings(it.bms_id); /* balance-write readback (§10) */
             }
             break;
         }
