@@ -6,6 +6,7 @@
 #include "state_cache.h"
 #include "arbiter.h"
 #include "ble_owner.h"
+#include "decoder.h"
 #include "measure.h"
 #include "mqtt_task.h"
 #include "tunnel_srv.h"
@@ -122,16 +123,13 @@ static void maintenance_tick(void)
                                               * bootstrap dispatches adjacent */
                 arbiter_poll(id, JK_CMD_DEVICE_INFO);
                 arbiter_poll(id, JK_CMD_CELL_INFO);
-                /* 0x6C: the app's third bootstrap command (captured live
-                 * 2026-08-29 through the TUN_3 clone). The app sends 97, 96,
-                 * 6C once and then NOTHING — and the stream runs forever.
-                 * Without 6C a module streams ~25 s after the last 96 and
-                 * sleeps (bank 2's death cycle); bank 3 never armed at all
-                 * until the app's 6C. Replayed verbatim (checksum intact). */
-                static const uint8_t stream_en[20] = {
-                    0xAA,0x55,0x90,0xEB,0x6C,0x04,0xA5,0xD0,0x86,0x0C,
-                    0xBD,0x7B,0x74,0xBE,0xF7,0x38,0x11,0x9D,0xE6,0x1E };
-                arbiter_app_write(id, 0, false, stream_en, sizeof(stream_en));
+                /* 0x6C stream-enable (the app's third bootstrap command,
+                 * captured 2026-08-29): WITHOUT it a module streams ~25 s
+                 * after the last 96 and sleeps. But sent here, adjacent to
+                 * 97/96, it fails to take on some boots/banks (paired-0x208
+                 * churn). The decoder sends it, sequenced after the session's
+                 * first cell frame — this just re-arms the one-shot. */
+                decoder_session_reset(id);
             }
             s_last_link[id] = rt.link;
         }

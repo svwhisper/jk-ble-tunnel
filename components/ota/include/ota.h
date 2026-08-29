@@ -27,4 +27,9 @@ void ota_mark_valid(void);
  * call once after the network is up. */
 void ota_start(uint16_t port);
 
+/* Reboot in ~1 s via a pre-existing esp_timer — safe under internal-heap
+ * exhaustion, where an xTaskCreate-based deferred reboot fails silently.
+ * Shared by the OTA receiver and the MQTT cmd/reboot handler. */
+void ota_schedule_reboot(void);
+
 #endif /* OTA_H */

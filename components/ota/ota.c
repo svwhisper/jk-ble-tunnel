@@ -18,18 +18,33 @@
 #include "esp_partition.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "ota";
 static httpd_handle_t s_srv;
 
-/* Deferred reboot so the 200 response flushes to the client first. */
-static void reboot_task(void *arg)
+/* Deferred reboot so the caller's response/ack flushes first. esp_timer, NOT
+ * xTaskCreate: the timer task and its stack exist from boot, so this cannot
+ * fail at reboot time. The old 2048 B xTaskCreate failed SILENTLY once link
+ * churn had exhausted internal heap — the node said "rebooting" over and over
+ * and never did (2026-08-29; heap looked fine because PSRAM hid it). */
+static void reboot_cb(void *arg) { esp_restart(); }
+void ota_schedule_reboot(void)
 {
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    ESP_LOGW(TAG, "rebooting into new image");
-    esp_restart();
+    static esp_timer_handle_t s_tmr;
+    if (!s_tmr) {
+        const esp_timer_create_args_t a = { .callback = reboot_cb, .name = "reboot" };
+        esp_err_t e = esp_timer_create(&a, &s_tmr);
+        if (e != ESP_OK) {          /* truly cornered: reboot from this task */
+            ESP_LOGE(TAG, "reboot timer create failed (%d) — direct restart", e);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            esp_restart();
+        }
+    }
+    ESP_LOGW(TAG, "reboot scheduled (1 s)");
+    esp_timer_start_once(s_tmr, 1000000);
 }
 
 static esp_err_t fail(httpd_req_t *req, esp_ota_handle_t h, const char *code, const char *msg)
@@ -54,9 +69,20 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     char buf[1460];
     int remaining = req->content_len;   /* from Content-Length */
     size_t total = 0;
+    int idle_timeouts = 0;
     while (remaining > 0) {
         int n = httpd_req_recv(req, buf, remaining < (int)sizeof(buf) ? remaining : (int)sizeof(buf));
-        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            /* Bounded, NOT `continue` forever: a half-open upload (client died
+             * mid-body, FIN lost) otherwise wedges httpd's single worker for
+             * the rest of the boot — the port accepts but nothing is served,
+             * and OTA looks dead until power-cycle (2026-08-29). 3 x 15 s of
+             * dead air is far beyond any live client's stall. */
+            if (++idle_timeouts >= 3)
+                return fail(req, h, "408 Request Timeout", "upload stalled — aborting");
+            continue;
+        }
+        idle_timeouts = 0;
         if (n <= 0) return fail(req, h, "400 Bad Request", "recv error / short upload");
         if (esp_ota_write(h, buf, n) != ESP_OK)
             return fail(req, h, "500 Internal Server Error", "flash write error");
@@ -77,7 +103,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     snprintf(ok, sizeof(ok), "OK: %u bytes -> %s, rebooting\n", (unsigned)total, upd->label);
     httpd_resp_sendstr(req, ok);
 
-    xTaskCreate(reboot_task, "ota_reboot", 2048, NULL, 5, NULL);
+    ota_schedule_reboot();
     return ESP_OK;
 }
 

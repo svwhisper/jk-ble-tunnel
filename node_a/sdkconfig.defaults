@@ -13,6 +13,13 @@ CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 # Concurrent central links: app-held unit + Node-RED round-robin (~3 budget).
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=4
+# GATT client procs: default 4 is starvation-prone here — every keepalive read
+# and with-response write burns one, and an op aimed at a dying module wedges
+# its proc for 30 s (NimBLE then TERMINATES that link: BLE_GATTC_UNRESPONSIVE_
+# TIMEOUT_MS). With 3-4 held links the pool exhausted and reads for healthy
+# banks failed ENOMEM silently -> they slept ~30 s later (the one-crowned-bank
+# churn storm, 2026-08-29). 16 = never contended.
+CONFIG_BT_NIMBLE_GATT_MAX_PROCS=16
 # 256, not 517: the JK BMS chunks notifies at 128 B and commands are 20 B; a
 # big preferred MTU just multiplies per-connection buffer usage (~13 KB/link
 # observed at 517 — three garage links ate ~40 KB of heap).

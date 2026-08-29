@@ -8,6 +8,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stddef.h>          /* NULL, used by the CFG_BMS parked entries */
 #include "jk_ble_defs.h"
 #include "secret.h"          /* WIFI_SSID/PASS, MQTT_*, JK_LOGIN_PIN */
 

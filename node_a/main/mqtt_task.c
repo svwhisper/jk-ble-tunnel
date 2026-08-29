@@ -8,11 +8,13 @@
 #include "arbiter.h"
 #include "ble_owner.h"
 #include "nvs_store.h"
+#include "ota.h"
 #include "mqtt_client.h"
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "net_util.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -41,12 +43,19 @@ static void pub(const char *t, const char *payload, int retain)
 void mqtt_publish_health(void)
 {
     if (!s_cli) return;
-    char j[128];
+    char j[192];
+    /* ifree/imin: INTERNAL heap — task stacks and NimBLE conn objects live
+     * here, and with PSRAM the headline heap number hides its exhaustion
+     * (2026-08-29: both deferred-reboot task creates failed silently at
+     * heap=8.39MB because internal was gone after ~25 min of link churn). */
     snprintf(j, sizeof(j),
-             "{\"heap\":%u,\"min_heap\":%u,\"rssi\":%d,\"up\":%lld,"
+             "{\"heap\":%u,\"min_heap\":%u,\"ifree\":%u,\"imin\":%u,"
+             "\"rssi\":%d,\"up\":%lld,"
              "\"ble\":%d,\"conn\":%u,\"disc\":%u}",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)esp_get_minimum_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              net_wifi_rssi(), (long long)(esp_timer_get_time()/1000000),
              ble_owner_ble_enabled() ? 1 : 0,
              (unsigned)ble_owner_conn_count(),
@@ -73,6 +82,20 @@ void mqtt_publish_llevent(const char *kind, uint8_t bms_id, int reason)
     pub(CFG_MQTT_BASE "/bridge/llevent", j, 0);
 }
 
+/* Keepalive-read cycle outcome (every ~15 s): ok = reads issued, skip = still
+ * in flight from last cycle (module slow/dying), err = ble_gattc_read refused
+ * (GATT proc pool exhausted). skip/err > 0 is the starvation signature.
+ * rssi = caller-formatted per-bank link RSSI fragment (may be empty) — added
+ * to test the RF-gradient theory of the per-bank 0x208 death rates. */
+void mqtt_publish_ka(uint8_t ok, uint8_t skip, uint8_t err, const char *rssi)
+{
+    char j[160];
+    snprintf(j, sizeof(j), "{\"ok\":%u,\"skip\":%u,\"err\":%u,\"rssi\":{%s},\"up\":%lld}",
+             ok, skip, err, rssi ? rssi : "",
+             (long long)(esp_timer_get_time()/1000000));
+    pub(CFG_MQTT_BASE "/bridge/ka", j, 0);
+}
+
 static void pub_hex(char *hex, size_t cap, uint8_t bms_id, const char *leaf,
                     const uint8_t *data, uint16_t len)
 {
@@ -92,8 +115,6 @@ void mqtt_publish_raw(uint8_t bms_id, const uint8_t *data, uint16_t len)
 void mqtt_publish_appwrite(uint8_t bms_id, const uint8_t *data, uint16_t len)
 { static char hex[600]; pub_hex(hex, sizeof(hex), bms_id, "appwrite", data, len); }
 
-/* Deferred reboot so the caller's MQTT publish/ack can flush first. */
-static void reboot_task(void *arg) { vTaskDelay(pdMS_TO_TICKS(500)); esp_restart(); }
 
 /* ---- inbound command routing -------------------------------------------- */
 /* topic form: jkbms/<id>/cmd/<what>, plus system commands under jkbms/bridge/cmd/ */
@@ -112,7 +133,7 @@ static void on_cmd(const char *t, int tlen, const char *data, int dlen)
         if (dlen == 0) return;
         pub(CFG_MQTT_BASE "/bridge/cmd/reboot", "", 1);   /* clear retained */
         ESP_LOGW(TAG, "reboot requested via MQTT");
-        xTaskCreate(reboot_task, "mqtt_reboot", 2048, NULL, 5, NULL);
+        ota_schedule_reboot();   /* esp_timer path — survives heap exhaustion */
         return;
     }
     if (!strcmp(topic, CFG_MQTT_BASE "/bridge/cmd/scan")) {
@@ -149,7 +170,7 @@ static void on_cmd(const char *t, int tlen, const char *data, int dlen)
         pub(CFG_MQTT_BASE "/bridge/cmd/nvsclear", "", 1);  /* clear retained */
         ESP_LOGW(TAG, "clearing harvest NVS + rebooting (re-harvest fresh)");
         nvs_clear_harvest_all();
-        xTaskCreate(reboot_task, "nvs_reboot", 2048, NULL, 5, NULL);
+        ota_schedule_reboot();
         return;
     }
 
