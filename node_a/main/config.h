@@ -69,13 +69,11 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
 #define CFG_CONN_LATENCY         9       /* peripheral may skip 9 idle events      */
 #define CFG_CONN_SUPERVISION_MS  8000    /* controller drop threshold              */
 
-/* BLE master switch: boots OFF, then AUTO-ARMS after CFG_BLE_AUTO_ARM_S
- * seconds unless an operator sent an explicit cmd/ble first. The window
- * guarantees an OTA can always slip in after a reboot even if BLE itself is
- * causing trouble (owner design, 2026-08-29). cmd/ble on|off still works
- * any time and suppresses the pending auto-arm. */
-#define CFG_BLE_ON_AT_BOOT       0
-#define CFG_BLE_AUTO_ARM_S       30
+/* BLE master switch: the operator's last cmd/ble on|off is persisted in NVS
+ * and restored at boot; a never-set node boots OFF. (Replaced the 30 s
+ * auto-arm 2026-08-29 with owner consent: OTA is start-early + self-healing
+ * now, so it no longer needs a radio-quiet arming window — and after the
+ * CPUAux incident a power blip must NOT re-arm BLE on its own.) */
 #define CFG_POLL_PERIOD_MS       5000    /* internal round-robin poll cadence      */
 
 /* ---- Tunnel (spec §6) --------------------------------------------------- */

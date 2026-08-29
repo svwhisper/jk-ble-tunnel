@@ -232,19 +232,17 @@ static void maintenance_tick(void)
 static void supervisor_task(void *arg)
 {
     esp_task_wdt_add(NULL);
+    /* Restore the operator's persisted BLE choice (default OFF). Replaced the
+     * 30 s auto-arm 2026-08-29: OTA no longer needs a radio-quiet window, and
+     * silent-until-told means a power blip can't chirp/crash the fleet. */
+    if (nvs_get_ble_enabled()) {
+        ESP_LOGW(TAG, "restoring persisted BLE state: ON");
+        ble_owner_set_ble(true);
+    }
     for (;;) {
         esp_task_wdt_reset();
         harvest_tick();      /* idempotent: skips units already in NVS */
         maintenance_tick();
-        {   /* auto-arm BLE after the post-boot OTA window (see config.h) */
-            static int aa; 
-            if (!ble_owner_ble_enabled() && !ble_owner_cmd_seen() &&
-                ++aa == CFG_BLE_AUTO_ARM_S) {
-                ESP_LOGW(TAG, "auto-arming BLE (no operator command in %d s)",
-                         CFG_BLE_AUTO_ARM_S);
-                ble_owner_set_ble(true);
-            }
-        }
         { static int ka; if (++ka >= 15) { ka = 0;
               if (ble_owner_ble_enabled()) ble_owner_keepalive_read(); } }
         { static int hb; if (++hb >= 15) { hb = 0; mqtt_publish_health(); } }

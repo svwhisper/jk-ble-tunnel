@@ -57,6 +57,24 @@ void nvs_clear_harvest_all(void)
     ESP_LOGW(TAG, "harvest NVS cleared");
 }
 
+bool nvs_get_ble_enabled(void)
+{
+    nvs_handle_t h; uint8_t v = 0;
+    if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return false;
+    nvs_get_u8(h, "ble_en", &v);        /* NOT_FOUND leaves v=0 = OFF */
+    nvs_close(h);
+    return v != 0;
+}
+
+void nvs_put_ble_enabled(bool on)
+{
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "ble_en", on ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 bool nvs_get_meas(meas_record_t *out)
 {
     nvs_handle_t h;

@@ -35,6 +35,14 @@ bool nvs_get_harvest(uint8_t bms_id, harvest_entry_t *out);
 void nvs_put_harvest(uint8_t bms_id, const harvest_entry_t *in);
 void nvs_clear_harvest_all(void);   /* wipe all harv_* (stale layout reference) */
 
+/* BLE master switch, persisted: the operator's last cmd/ble on|off survives
+ * power cycles (default OFF when never set). Replaced the 30 s auto-arm
+ * 2026-08-29: with OTA no longer needing a radio-quiet window, silent-until-
+ * told is the safe default — a power blip must not chirp (or crash) the
+ * garage BMS fleet. */
+bool nvs_get_ble_enabled(void);
+void nvs_put_ble_enabled(bool on);
+
 /* Measurement crash guard (spec §9). saved_settings is the raw settings frame
  * captured before altering balance current. */
 typedef struct {
