@@ -48,9 +48,6 @@ typedef struct {
     uint8_t   want_record;    /* record we expect back for a POLL            */
     uint8_t   timeout_strikes;/* consecutive txn timeouts on this link       */
     int64_t   renegotiate_at_us; /* central-initiated param update pending    */
-    bool      ka_pending;     /* keepalive read in flight — never stack them:
-                               * a read to a dormant module wedges a NimBLE
-                               * GATT proc for 30 s, and the pool is finite  */
 } link_t;
 
 static link_t s_links[CFG_LINK_POOL_SIZE];
@@ -196,48 +193,30 @@ static void do_gatt_dump(int bms_id)
     }
 }
 
-/* Beep-free keep-alive: GATT read on held links (see header). Response is
- * discarded; the point is provable central liveness at the ATT layer. */
-static int ka_read_cb(uint16_t conn, const struct ble_gatt_error *err,
-                      struct ble_gatt_attr *attr, void *arg)
-{
-    (void)conn; (void)err; (void)attr;
-    ((link_t *)arg)->ka_pending = false;   /* stale-slot write is benign */
-    return 0;
-}
+/* Link vitals — the GENTLE CLIENT replacement for the keepalive GATT read
+ * (2026-08-29 CPUAux reframe). The old 15 s ble_gattc_read per link was our
+ * only ATT-layer traffic to a streaming module, and the prime suspect for
+ * crash-looping the JK's aux CPU (the phone app and esphome-jk-bms never
+ * read; both survive 24/7). "Keepalive is life support" was disproven: reads
+ * don't keep modules alive. So: NOTHING goes on the air here. RSSI comes
+ * from the local controller (last-received-packet HCI read, zero radio
+ * traffic) and the 0x02 stream itself is the liveness signal. */
 void ble_owner_keepalive_read(void)
 {
-    /* This read is each module's ONLY evidence of a live client between
-     * commands — a bank whose read stops issuing sleeps ~30 s later. With a
-     * 4-deep GATT proc pool (pre-2026-08-29 default), reads wedged on dying
-     * links exhausted the pool and ble_gattc_read failed ENOMEM silently for
-     * the healthy banks: exactly one bank kept winning a proc and stayed up
-     * while the rest churned in ~30 s lockstep. Hence: never stack a read on
-     * a link (ka_pending), check every rc, and publish the per-cycle outcome
-     * (jkbms/bridge/ka) so starvation is visible from the house. */
-    uint8_t ok = 0, skip = 0, err = 0;
+    uint8_t links = 0;
     char rssi_frag[64] = ""; int rf = 0;
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
     for (int i = 0; i < CFG_LINK_POOL_SIZE; i++) {
         link_t *l = &s_links[i];
         if (!(l->in_use && l->conn_handle && l->val_handle)) continue;
-        /* Per-link RSSI (local HCI read, no radio traffic): the per-bank 0x208
-         * death rate forms a gradient across identical modules — if it tracks
-         * RSSI, the dormancy hunt ends at antennas, not protocol. */
+        links++;
         int8_t rssi;
         if (ble_gap_conn_rssi(l->conn_handle, &rssi) == 0)
             rf += snprintf(rssi_frag + rf, sizeof(rssi_frag) - rf, "%s\"%u\":%d",
                            rf ? "," : "", l->bms_id, rssi);
-        if (l->ka_pending) { skip++; continue; }
-        int rc = ble_gattc_read(l->conn_handle, l->val_handle, ka_read_cb, l);
-        if (rc == 0) { l->ka_pending = true; ok++; }
-        else {
-            err++;
-            ESP_LOGW(TAG, "keepalive read bms %u rc=%d (proc pool?)", l->bms_id, rc);
-        }
     }
     xSemaphoreGive(s_mtx_link_pool);
-    mqtt_publish_ka(ok, skip, err, rssi_frag);
+    mqtt_publish_ka(links, rssi_frag);
 }
 
 /* ---- raw-frame capture (jkbms/bridge/cmd/rawcap) ------------------------ */

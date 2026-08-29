@@ -83,16 +83,16 @@ void mqtt_publish_llevent(const char *kind, uint8_t bms_id, int reason)
     pub(CFG_MQTT_BASE "/bridge/llevent", j, 0);
 }
 
-/* Keepalive-read cycle outcome (every ~15 s): ok = reads issued, skip = still
- * in flight from last cycle (module slow/dying), err = ble_gattc_read refused
- * (GATT proc pool exhausted). skip/err > 0 is the starvation signature.
- * rssi = caller-formatted per-bank link RSSI fragment (may be empty) — added
- * to test the RF-gradient theory of the per-bank 0x208 death rates. */
-void mqtt_publish_ka(uint8_t ok, uint8_t skip, uint8_t err, const char *rssi)
+/* Link vitals (every ~15 s, topic kept as bridge/ka for tripwire continuity):
+ * links = held central links, rssi = caller-formatted per-bank link RSSI
+ * fragment (local HCI read — the gentle client puts NOTHING on the air; the
+ * old ok/skip/err GATT-read counters died with the keepalive read itself,
+ * 2026-08-29 CPUAux reframe). */
+void mqtt_publish_ka(uint8_t links, const char *rssi)
 {
     char j[160];
-    snprintf(j, sizeof(j), "{\"ok\":%u,\"skip\":%u,\"err\":%u,\"rssi\":{%s},\"up\":%lld}",
-             ok, skip, err, rssi ? rssi : "",
+    snprintf(j, sizeof(j), "{\"links\":%u,\"rssi\":{%s},\"up\":%lld}",
+             links, rssi ? rssi : "",
              (long long)(esp_timer_get_time()/1000000));
     pub(CFG_MQTT_BASE "/bridge/ka", j, 0);
 }

@@ -90,7 +90,10 @@ static void pub_bridge_alert(uint8_t id, const char *what)
 }
 
 /* ---- per-tick maintenance ---------------------------------------------- */
-static uint8_t s_rr;   /* round-robin cursor for NR polling */
+/* Gentle-client reconnect pacing (see config.h rationale). */
+static int64_t  s_linkup_us[CFG_NUM_UNITS];     /* when unit went LINK_UP     */
+static int64_t  s_hold_until_us[CFG_NUM_UNITS]; /* internal drivers idle till */
+static uint32_t s_hold_s[CFG_NUM_UNITS];        /* current ladder rung        */
 
 static void maintenance_tick(void)
 {
@@ -120,6 +123,8 @@ static void maintenance_tick(void)
              * (in this order) is what makes fw 19.31 start streaming 0x02
              * cell frames; see the round-robin note above. */
             if (rt.link == LINK_UP) {
+                s_linkup_us[id] = now;       /* session clock for the gentle
+                                              * reconnect ladder below */
                 arbiter_clear_pending(id);   /* flush stale polls first, so the
                                               * bootstrap dispatches adjacent */
                 arbiter_poll(id, JK_CMD_DEVICE_INFO);
@@ -131,6 +136,35 @@ static void maintenance_tick(void)
                  * churn). The decoder sends it, sequenced after the session's
                  * first cell frame — this just re-arms the one-shot. */
                 decoder_session_reset(id);
+            } else if (s_last_link[id] == LINK_UP) {
+                /* Session ended. Three regimes (see config.h soak verdict):
+                 * stable (≥ STABLE_SESSION_S) reconnects promptly and resets
+                 * the ladder; short-but-PRODUCTIVE (module sent frames — its
+                 * BLE stack just died, endemic on these units) waits a fixed
+                 * moderate hold; short-and-silent escalates the ladder so we
+                 * never feed a struggling aux CPU the ~30 s churn that
+                 * latched bank 3. */
+                int64_t lived = now - s_linkup_us[id];
+                bool productive = rt.last_seen_us > s_linkup_us[id];
+                if (lived >= CFG_STABLE_SESSION_S * 1000000LL) {
+                    s_hold_s[id] = 0;
+                } else if (productive) {
+                    s_hold_s[id] = 0;   /* ladder unused for productive ends */
+                    s_hold_until_us[id] =
+                        now + CFG_RECONNECT_HOLD_PROD_S * 1000000LL;
+                    ESP_LOGW(TAG, "bms %u streamed %llds then died — hold %ds",
+                             id, (long long)(lived / 1000000),
+                             CFG_RECONNECT_HOLD_PROD_S);
+                } else {
+                    s_hold_s[id] = s_hold_s[id] ? s_hold_s[id] * 2
+                                                : CFG_RECONNECT_HOLD_BASE_S;
+                    if (s_hold_s[id] > CFG_RECONNECT_HOLD_CAP_S)
+                        s_hold_s[id] = CFG_RECONNECT_HOLD_CAP_S;
+                    s_hold_until_us[id] = now + s_hold_s[id] * 1000000LL;
+                    ESP_LOGW(TAG, "bms %u silent session %llds — reconnect hold %lus",
+                             id, (long long)(lived / 1000000),
+                             (unsigned long)s_hold_s[id]);
+                }
             }
             s_last_link[id] = rt.link;
         }
@@ -141,7 +175,8 @@ static void maintenance_tick(void)
          * link-up flushes this pending before it can reach the BMS. (The old
          * round-robin keep-alive doubled as this driver; when it was removed
          * for beep silence, nothing initiated connections at all.) */
-        if (!ble_quiesce && cfg_name_for(id)[0] != '\0' && !rt.link_held) {
+        if (!ble_quiesce && cfg_name_for(id)[0] != '\0' && !rt.link_held &&
+            now >= s_hold_until_us[id]) {
             static int64_t s_conn_drive_us[CFG_NUM_UNITS];
             if (now - s_conn_drive_us[id] > 20000000LL) {
                 s_conn_drive_us[id] = now;
@@ -171,7 +206,7 @@ static void maintenance_tick(void)
 
         /* Reachability-probe floor for unreachable units (spec §4). */
         if (!ble_quiesce && cfg_name_for(id)[0] != '\0' &&
-            rt.link == LINK_UNREACHABLE &&
+            rt.link == LINK_UNREACHABLE && now >= s_hold_until_us[id] &&
             now - s_last_probe_us[id] > CFG_REACHABILITY_PROBE_S * 1000000LL) {
             s_last_probe_us[id] = now;
             arbiter_poll(id, JK_CMD_DEVICE_INFO);

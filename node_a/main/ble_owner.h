@@ -44,9 +44,10 @@ bool ble_owner_ble_enabled(void);
  * real unit; a healthy soak holds these flat after the initial connects). */
 uint32_t ble_owner_conn_count(void);
 uint32_t ble_owner_disc_count(void);
-/* Beep-free liveness: issue a GATT READ of FFE1 on every held link — ATT
- * traffic without a JK command frame, so no piezo ack. Called by the
- * supervisor every ~15 s to (attempt to) hold off module dormancy. */
+/* Link vitals (gentle client, 2026-08-29): publish held-link count + per-bank
+ * RSSI to bridge/ka. Purely local — NO on-air traffic (the old GATT keepalive
+ * read is gone: it was the prime aux-CPU crash-driver suspect, and "reads hold
+ * off dormancy" was disproven). Called by the supervisor every ~15 s. */
 void ble_owner_keepalive_read(void);
 
 #endif /* BLE_OWNER_H */

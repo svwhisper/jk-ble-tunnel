@@ -22,8 +22,7 @@ void mqtt_publish_raw(uint8_t bms_id, const uint8_t *data, uint16_t len); /* jkb
 void mqtt_publish_appwrite(uint8_t bms_id, const uint8_t *data, uint16_t len); /* jkbms/<id>/appwrite hex */
 void mqtt_publish_gatt(const char *json);   /* jkbms/bridge/gatt (diagnostic) */
 void mqtt_publish_llevent(const char *kind, uint8_t bms_id, int reason); /* bridge/llevent */
-void mqtt_publish_ka(uint8_t ok, uint8_t skip, uint8_t err,
-                     const char *rssi);                                  /* bridge/ka      */
+void mqtt_publish_ka(uint8_t links, const char *rssi);                   /* bridge/ka      */
 void mqtt_publish_health(void);             /* jkbms/bridge/health heap/rssi  */
 
 /* Command ack (spec §7): jkbms/<id>/ack {cmd,id,status,detail,readback}. */

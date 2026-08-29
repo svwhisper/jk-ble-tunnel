@@ -52,6 +52,28 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
 #define CFG_APP_LINK_TIMEOUT_MS  10000   /* app-write wait for link-up before fail */
 #define CFG_REACHABILITY_PROBE_S 60      /* supervisor probe floor for unreachable */
 #define CFG_RECONNECT_CAP_MS     30000   /* exponential backoff cap               */
+/* Gentle-client reconnect pacing (2026-08-29 CPUAux reframe): a session that
+ * died young signals a struggling aux CPU — hammering reconnects at it (LL
+ * connect chirp + bootstrap command-ack beeps per cycle, ~30 s apart) is the
+ * abuse profile that latched bank 3's CPUAux fault. After a session shorter
+ * than STABLE_SESSION_S the supervisor holds that unit's internal reconnect
+ * drivers off for an escalating 60→120→240→…→HOLD_CAP_S; one session past
+ * STABLE_SESSION_S resets the ladder. App/NR-sourced traffic still connects
+ * on demand during a hold (explicit intent overrides the pacing). */
+#define CFG_RECONNECT_HOLD_BASE_S 60
+#define CFG_RECONNECT_HOLD_CAP_S  600
+#define CFG_STABLE_SESSION_S      600
+/* Soak verdict (2026-08-29 afternoon): short sessions are ENDEMIC to these
+ * modules under ESP32 centrals — esphome-jk-bms issue #732 shows 7 s drops
+ * on a PB2A16S20P, and reads/latency/params were each eliminated here (bank
+ * 2 holds for hours at the WORST RSSI; banks 1/3 die 11–140 s in by sudden
+ * LL silence while their RS485 side stays up). So a short session that
+ * STREAMED isn't abuse-signal — the module served us until its BLE stack
+ * died. Those reconnect on a fixed moderate hold (coverage for the
+ * charge-stop guard); only sessions that never produced a frame escalate on
+ * the ladder above. ~200 cycles/day/bank worst case vs the ~3000/day of the
+ * churn era that latched bank 3. */
+#define CFG_RECONNECT_HOLD_PROD_S 300
 /* Connection parameters — THE coex fix (2026-08-28 architecture review).
  * NimBLE defaults (30 ms interval, 2.56 s supervision) demand the shared
  * radio every ~10 ms across 3 links; WiFi bursts then starve a link past its
@@ -64,9 +86,18 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
  * built for: FAST interval + generous SLAVE LATENCY — the peripheral gets
  * 30-40 ms service while it has data and skips up to 9 events when idle
  * (~400 ms effective), so the radio budget stays coex-friendly. */
+/* v3 (2026-08-29 gentle-client soak): latency 9 → 0. With the keepalive reads
+ * removed, banks 1+3 STILL died 0x208 mid-stream (bank 2 solid) — and slave
+ * latency is the one remaining divergence from every client that survives
+ * these modules 24/7 (phone app, esphome-jk-bms: latency 0). Hypothesis: the
+ * JK bridge MCU mishandles event-skipping — sleep-clock drift across 9
+ * skipped events misses the RX window, module goes silent, supervision kills
+ * the link; per-bank tolerance gradient = per-module crystal quality. Coex
+ * stays covered by the 8 s supervision (the real 2026-08-28 fix), not by
+ * latency. */
 #define CFG_CONN_ITVL_MIN_MS     30      /* central connection interval range      */
 #define CFG_CONN_ITVL_MAX_MS     40
-#define CFG_CONN_LATENCY         9       /* peripheral may skip 9 idle events      */
+#define CFG_CONN_LATENCY         0       /* NO event-skipping (see v3 note)        */
 #define CFG_CONN_SUPERVISION_MS  8000    /* controller drop threshold              */
 
 /* BLE master switch: the operator's last cmd/ble on|off is persisted in NVS
