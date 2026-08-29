@@ -145,6 +145,37 @@ LL event counters. Findings, in discovery order:
 currently the test board): dual-core kills the contention class, PSRAM kills
 the heap class. The codebase already builds for esp32s3.
 
+## MISSION COMPLETE + DORMANCY HUNT PENDING (2026-08-29, session end)
+
+**Delivered & in production:** JK app works FROM THE HOUSE on TUN 1 & 2
+clones with live garage-bank data (spec's core promise). 3-bank fleet
+(1/2/3) streams to MQTT. S3 Node A on garage power: **BLE auto-arms 30 s
+after boot** (guaranteed OTA window every reboot — lockout-proof, owner
+design; cmd/ble any time overrides). Node B in the house, TUN-prefixed
+clones. Idle-disconnect disabled (was pointless 0x216 churn). Latest
+commit 194845e.
+
+**Protocol (final):** bootstrap = 0x97, 0x96, then **0x6C** (the app's
+third command, captured through the transparent clone — replayed verbatim,
+20-byte frame hardcoded in supervisor.c). 6C = stream-enable: redeemed
+"flaky" bank 1 and "never-arms" bank 3 instantly. The BMS piezo-acks
+EVERY command frame — a streaming unit must hear NOTHING (silent-client).
+
+## NEXT SESSION — THE DORMANCY HUNT (all remote)
+1. **0x208 cycle persists on some boots despite 6C** (~1 drop/30 s, one or
+   two banks; TUN_3 flickers in house scans when bank 3 is the victim).
+   Suspects: 6C delivery timing/ordering on link-up (raw write races the
+   96?), 6C payload session-sensitivity, or per-boot module state.
+   Tools: jkbms/bridge/llevent (per-bank reasons), rawcap, appwrite.
+2. Consider: capture a SECOND app session's 6C (does the payload differ?).
+3. Unit 0 (Telink module): connects, never harvests/streams even with 6C
+   + relaxed layout check — own case, likely different protocol dialect.
+4. Later: O-2 writes, TX-power tuning, move OTA base URL story to GitHub.
+
+Ops crib: push = tools/ota_push.py a|b --host <ip> (A=.239 garage, B=house
+lease); cmds jkbms/bridge/cmd/{ble,reboot,scan,rawcap,gattdump,nvsclear};
+vitals = bridge/{health,boot,llevent}. A auto-arms BLE 30 s post-boot.
+
 ## S3 PORT — DONE (2026-08-28 evening, autonomous session)
 
 **Node A now runs on the ESP32-S3 Gold Edition** (16 MB flash, 8 MB octal
