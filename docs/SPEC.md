@@ -1,7 +1,7 @@
-# JK BMS BLE Tunnel — Implementation Spec (rev 3)
+# JK BMS BLE Tunnel — Implementation Spec (rev 4, as-built)
 
 **Target:** ESP-IDF (FreeRTOS), two ESP32 nodes on one LAN
-**Status:** for implementation by a developer with no access to the prior discussion — this document is self-contained. Rev 2 incorporated a design review (single shared GATT table on Node B, tunnel write results + resync, crash-safe measurement mode, NVS-persisted harvest, MTU handling). Rev 3 closes the seams a second pass found: measurement × app arbitration, a tunnel grace window, concurrent-connection enforcement, an unreachable-probe floor, incremental harvest, write-FIFO hygiene.
+**Status:** implemented and deployed (2026-08-28/29); this revision corrects the design-era text to match the built system (link pool, chip choices, MTU, write-op selection, protocol findings). The document stays self-contained; `SESSION_NOTES.md` carries the operational findings and their evidence. Rev 2 incorporated a design review (single shared GATT table on Node B, tunnel write results + resync, crash-safe measurement mode, NVS-persisted harvest, MTU handling). Rev 3 closed the seams a second pass found: measurement × app arbitration, a tunnel grace window, concurrent-connection enforcement, an unreachable-probe floor, incremental harvest, write-FIFO hygiene.
 **Reference implementation to port from:** `syssi/esphome-jk-bms` (`components/jk_bms_ble/`). Do not reimplement the JK frame decode from scratch; lift and adapt it. This spec tells you *what to build around it*.
 
 ---
@@ -19,19 +19,19 @@ Two consumers, one radio link per BMS:
 ### Non-goals (owner decisions — do not add these back)
 
 - **No security layer.** No tunnel authentication or encryption, no MQTT ACL requirements beyond broker user/pass, no BLE pairing/bonding on Node B. Rationale: remote off-grid residence — anyone within BLE or LAN range already has physical access to the equipment. Note the §10 whitelist is a **safety** measure (limits the blast radius of automation bugs), not a security control; it stays.
-- ~~**No OTA for the two nodes.** Flash over serial/USB.~~ **REVERSED 2026-08-28**
-  (Node A is deployed to the garage, out of USB reach). Both nodes now carry a
-  push-model, rollback-protected node-firmware OTA receiver (`components/ota/`,
+- **Node-firmware OTA is push-model and rollback-protected** (`components/ota/`,
   always-listening `POST /ota` on `CFG_OTA_PORT` 3765; host tool
-  `tools/ota_push.py`). No security on it, consistent with the item above. The
-  one-time OTA-enabling flash (partition-table change) is still over USB.
+  `tools/ota_push.py a|b --host <ip>`). Added 2026-08-28 when Node A moved to
+  the garage out of USB reach (reversing the original no-OTA stance). No
+  security on it, consistent with the item above. The one-time OTA-enabling
+  flash (partition-table change) is over USB; everything after is OTA.
 - **No BMS firmware updates through the tunnel** (§11 — safety rule, stays). Node
   OTA above is the two ESP32s' *own* application firmware only; it never touches
   BMS firmware and never routes through the tunnel.
 
 ## 2. Physical topology
 
-- **Node A (garage):** BLE central. Sole owner of the links to the BMS units. Also MQTT client and TCP tunnel server. Powered continuously near the battery. **This node is unavoidable** — it must be within BLE range of the batteries. **Chip: any ESP32 with both WiFi and BLE** — original WROOM/WROVER (BT 4.2) is fine and is the most battle-tested target for the `syssi/esphome-jk-bms` central code being ported. It only ever acts as a BLE central, so it does not need BLE 5.0. Exclude the ESP8266 (no BLE) and ESP32-H2 (no WiFi). Prefer an external-antenna board (e.g. WROOM-32U) if the BMS units sit in a metal enclosure or more than ~2 m away — antenna matters more than variant for reliability out at the battery.
+- **Node A (garage):** BLE central. Sole owner of the links to the BMS units (deployed fleet: 4× **JK-PB2A16S20P**, fw 19.31, 16S). Also MQTT client and TCP tunnel server. Powered continuously near the battery. **This node is unavoidable** — it must be within BLE range of the batteries. **Chip: ESP32-S3 with PSRAM** (as built: S3, 16 MB flash, 8 MB octal PSRAM → ~8 MB heap). An ESP32-C3 was tried first and proved marginal: BLE churn + streaming produced ~45 KB transient allocation spikes against a ~100 KB free heap, and on the single core the watchdog-feeding supervisor starved under load. The S3's PSRAM and second core bury both failure classes. Exclude the ESP8266 (no BLE) and ESP32-H2 (no WiFi). Prefer an external-antenna board if the BMS units sit in a metal enclosure or more than ~2 m away — antenna matters more than variant for reliability out at the battery.
 - **Node B (house):** BLE peripheral. Advertises **four** connectable identities (clones of the four BMS units), one per real unit. The app connects to whichever it wants. TCP tunnel client to A. **Must be a BLE 5.0 chip — ESP32-C3 / S3 / C6 — not the original ESP32-WROOM (BT 4.2).** Four simultaneous connectable advertising sets require BLE 5.0 multiple-advertising-sets support.
 - Both on the same LAN. Added round-trip latency ≈ one BLE connection interval on each side + a few ms of LAN — tens of ms per GATT round trip. Acceptable for the app and for notifications.
 
@@ -44,7 +44,7 @@ Two consumers, one radio link per BMS:
   BMS4 ┘          └══MQTT══► Mosquitto ══► Node-RED (reads all 4, writes balance)
 ```
 
-Node A holds up to ~3 concurrent BLE central connections and multiplexes them. Every BMS interaction — from the app (relayed via B, tagged with which identity) or from Node-RED (via MQTT) — is funnelled through a per-BMS command queue with a strict response-or-timeout gate, because the JK protocol is request/response framed and interleaving corrupts its state machine.
+Node A holds a BLE central link to **all four units concurrently** (4-slot link pool, `NIMBLE_MAX_CONNECTIONS=4` on the S3) and multiplexes them. Every BMS interaction — from the app (relayed via B, tagged with which identity) or from Node-RED (via MQTT) — is funnelled through a per-BMS command queue with a strict response-or-timeout gate, because the JK protocol is request/response framed and interleaving corrupts its state machine.
 
 ---
 
@@ -56,12 +56,12 @@ Use ESP-IDF with NimBLE (central role). Suggested tasks, queues, and sync primit
 
 | Task | Priority | Core | Responsibility |
 |---|---|---|---|
-| `ble_owner` | high | 0 (radio) | Owns NimBLE central. Connects/disconnects BMS units, writes command frames to `0xFFE1`, receives notifications, **reassembles frames** (by length + checksum). The ONLY task that touches BLE. Manages a small pool of concurrent central links. |
+| `ble_owner` | high | 0 (radio) | Owns NimBLE central. Connects/disconnects BMS units, writes command frames (ATT write op chosen per the char's **discovered properties** — FFE1 vs FFE2 write types differ between the two radio-module variants in the fleet, §8), receives notifications, **reassembles frames** (by length + checksum). The ONLY task that touches BLE. Manages the 4-slot pool of concurrent central links. |
 | `arbiter` | med | 1 | Serialises requests **per BMS** through per-unit FIFOs. Enforces priority and the response/timeout gate. Tracks which identity the app currently holds. |
 | `mqtt` | med | 1 | Mosquitto client. Subscribes to command topics, publishes decoded state per BMS. Translates MQTT ↔ arbiter requests. Registers an LWT (§7). |
 | `tunnel_srv` | med | 1 | TCP server for Node B. Relays app GATT operations ↔ arbiter (tagged by identity), streams notifications outbound. **Single client: a new connection replaces the old one** (handles half-open sockets after a B reboot). |
 | `decoder` | low/med | 1 | Receives **completed, reassembled frames** from `ble_owner` via queue — decode never runs on the BLE callback stack. Parses into per-BMS structs; publishes to the state cache. Must tolerate unknown/unsolicited frame types (the app can trigger e.g. logbook `0xA1` responses). |
-| `supervisor` | low | 1 | Watchdog, reconnect backoff, per-link idle-disconnect timers, health metrics, round-robin scheduler for Node-RED polling, **measurement-mode restore guard (§9)**. |
+| `supervisor` | **high (8 — above every worker)** | 1 | Watchdog feeder, reconnect pacing, harvest coordination, health metrics, **measurement-mode restore guard (§9)**. Priority is load-bearing: as a low-priority task it starved under BLE + streaming load and the task WDT reboot-looped the node — the WDT feeder must outrank the work it supervises. |
 
 Node A runs SNTP (NTP server configurable) so `last_seen` and log timestamps are wall-clock.
 
@@ -79,20 +79,20 @@ Node A runs SNTP (NTP server configurable) so `last_seen` and log timestamps are
 - **First boot: harvest incrementally — never block commissioning on all four units being alive.** As each unit becomes reachable: connect, read the full GATT table + device-info frame (name, frame version, firmware version), disconnect, store to **NVS**, and bring that identity online at B. **Verify layout identity against the first harvested table** — the single-shared-table design on Node B (§5) depends on it. (Frame version, O-1, is about payload offsets, not the attribute table — a mixed JK04/JK02 fleet will typically still pass this check.)
 - **Every later boot:** serve from NVS immediately — B gets its blueprint with no dependency on any unit being awake or reachable.
 - **Re-harvest trigger:** on every real-link bring-up A reads the device-info frame anyway; if the firmware version differs from NVS, re-harvest that unit's table and re-verify layout identity.
-- **Layout mismatch (e.g. mixed firmware):** exclude that unit's identity (never sent to B, never advertised), publish an alert on `bridge/status`, keep serving the matching units. Do not guess a merged table.
+- **Layout mismatch: warn and ACCEPT** (publish `layout_differs_accepted` on the unit's ack topic, keep serving it). The original exclude-on-mismatch policy was wrong in practice: B's clone table has been static since the GATT-mirror landed, so per-unit differences are harmless — and unit 0's radio module legitimately differs in characteristic *properties* (not UUIDs) from the other three, which the exclude rule kept punishing. The phone app works identically against all four.
 
 ### Connect-on-demand + link pool
 
-Per-unit reachability is a tri-state, carried to B in `LINK` frames: **0 = unreachable** (connect attempts failing, backoff running), **1 = reachable-idle** (no link held; normal state), **2 = link-up**. At boot, units start **reachable-idle** — optimistic; the fail-loud connect path corrects it. **Recovery from unreachable must not depend on Node-RED polling:** the supervisor probes every unreachable unit at `REACHABILITY_PROBE_S` (default 60 s) indefinitely — otherwise, with polling off or MQTT down, an unreachable unit's identity never advertises again and the operator can't even try it from the app.
+Per-unit reachability is a tri-state, carried to B in `LINK` frames: **0 = unreachable** (connect attempts failing, backoff running), **1 = reachable-idle** (no link held; normal state), **2 = link-up**. At boot, units start **reachable-idle** — optimistic; the fail-loud connect path corrects it. **Recovery from unreachable is supervisor-owned and independent of MQTT:** the supervisor probes every unreachable unit at `REACHABILITY_PROBE_S` (default 60 s) indefinitely — otherwise an unreachable unit's identity never advertises again and the operator can't even try it from the app.
 
-- When the app connects to clone #N (signalled by B over the tunnel), Node A opens/holds a real link to BMS #N for the session. Expect 1–3 s establish latency on first open — the app shows connecting, then populates.
+- The pool holds **all four units** — no slot contention, no round-robin of link ownership. A unit's BLE module sleeps its radio ~25 s after the last received command (its own notify stream doesn't count), so links to non-streaming units drop on supervision timeout and are re-raised by paced reconnects; a module that latches stay-awake streams indefinitely.
+- When the app connects to clone #N (signalled by B over the tunnel), an **app-attach driver** raises the real link within ~5 s, bypassing any reconnect hold, and re-raises it if the module dozes mid-session. The app shows connecting, then populates.
 - **App writes arriving before the link is up are queued** (bounded FIFO, flushed in order on link-up). If the link isn't up within `APP_LINK_TIMEOUT_MS` (default 10 s), mark the unit unreachable, send `LINK 0`, and B terminates that app connection (§5) — the operator sees a disconnect, not a zombie session.
-- **When the app disconnects from a unit**, A performs a settings + cell-info re-read on it *before* the idle-disconnect timer runs: the operator may have changed anything in the app, and retained MQTT settings / B's read cache must not go stale. Republish `state/settings` and push `READ_CACHE`.
-- Node-RED polling round-robins the other units through the remaining pool slots. This doubles as the reachability probe — poll failures drive the tri-state.
-- If the app holds one unit continuously and Node-RED wants the other three, that's ≥2 concurrent central links — within the ~3 budget. With all four wanted live at once, round-robin the surplus.
-- Idle-disconnect a real link `IDLE_DISCONNECT_MS` after the app leaves it and no Node-RED request is pending, freeing the BMS's single client slot.
-- Reconnect with exponential backoff (cap ~30 s).
-- Request 30–50 ms connection intervals on central links — 3 links + WiFi coexistence on one radio schedules fine there, badly at 7.5 ms.
+- **When the app disconnects from a unit**, A performs a settings + cell-info re-read: the operator may have changed anything in the app, and retained MQTT settings / B's read cache must not go stale. Republish `state/settings` and push `READ_CACHE`.
+- **No keep-alive polling, ever.** The BMS piezo-acks EVERY command frame it receives, so a streaming unit must hear nothing; the 0x02 cell stream itself is the health signal. Commands are sent only to arm/re-arm a session (the §8 opener) and for app traffic. Link vitals (RSSI) come from the local controller — zero on-air cost.
+- Idle-disconnect is **effectively disabled** (`IDLE_DISCONNECT_MS` = 24 h): with a 4-slot pool holding every bank, freeing a slot after an app session just causes a pointless disconnect + reconnect chirp.
+- Session-end reconnect pacing is 3-regime: a stable session (≥10 min) reconnects promptly; a short session that streamed waits a fixed 300 s; a short *silent* session escalates 60 s→10 min — never hammer a struggling module. App traffic bypasses all holds.
+- **Connection parameters: accept the module's own L2CAP request outright** (it demands 20 ms interval / latency 0 / 6 s supervision timeout). Rejecting makes it hang up; renegotiating starts a parameter war. The design-era "request 30–50 ms" guidance is obsolete.
 
 ---
 
@@ -161,7 +161,7 @@ TCP, LAN-only, `TCP_NODELAY` on. Length-prefixed binary frames. Frames carry a `
 
 **Writes:** the same synchronous-callback constraint means B must complete the ATT write (both with- and without-response) immediately, then forward over the tunnel. ATT-level errors therefore cannot reach the app — acceptable, because the JK app confirms operations at the frame level via notifications, not via ATT status. `WRITE_RESULT` exists for observability and failure policy: on `link-down`, or `WRITE_FAIL_LIMIT` consecutive failures, B terminates that app connection (§5) instead of silently eating writes. **Hygiene:** the per-identity result-correlation FIFO and the consecutive-failure counter are cleared on every `CLIENT` transition and on tunnel resync — stale results from a previous session must never mis-correlate to, or kill, a fresh connection.
 
-**MTU / fragmentation:** A requests the maximum MTU (517) from each BMS, matching the reference implementation. B accepts whatever the iOS side negotiates (typically 185–527). JK frames (~300 B) span multiple notification chunks; `NOTIFY` payloads are opaque byte chunks, and **B re-chunks to ≤ (app MTU − 3)** when forwarding. Chunk boundaries don't matter — the app reassembles a byte stream by header + length.
+**MTU / fragmentation:** A requests ATT MTU **256** from each BMS — the reference implementation's 517 costs ~13 KB of heap per central link and buys nothing (the PB2A16S20P notifies in ≤128 B chunks). B accepts whatever the iOS side negotiates (typically 185–527). JK frames (~300 B) span multiple notification chunks; `NOTIFY` payloads are opaque byte chunks, and **B re-chunks to ≤ (app MTU − 3)** when forwarding. Chunk boundaries don't matter — the app reassembles a byte stream by header + length.
 
 ---
 
@@ -202,16 +202,19 @@ Results acked on `jkbms/<bms_id>/ack` with `{cmd, id, status, detail, readback}`
 
 ---
 
-## 8. JK BLE protocol notes (from the reference implementation)
+## 8. JK BLE protocol notes (as measured on the JK-PB2A16S20P fleet, fw 19.31)
 
-- Service UUID `0xFFE0`, characteristic `0xFFE1` (notify + write).
-- Commands: `0x96` cell info, `0x97` device info, `0xA1` logbook.
-- Frame versions: `JK04 (0x01)`, `JK02_24S (0x02)`, `JK02_32S (0x03)` — detect per unit at harvest; offsets differ.
-- Min response ~300 bytes; frames span multiple notifications — reassemble by length + checksum before decode.
+- Service UUID `0xFFE0`, characteristics `0xFFE1` (notify + write — the BMS→client stream and our poll channel) and `0xFFE2` (the official app's command channel).
+- **Characteristic write types vary by radio module, within one BMS model.** Three of the four PB2A16S20P units carry one module family (OUI C8:47:80): FFE1 accepts Write Request, FFE2 accepts Write Command. The fourth carries a Telink-OUI module (Nordic Secure-DFU service 0xFE59 on board) with the types **inverted**: FFE1 = write-no-rsp only, FFE2 = write-with-rsp only. ATT silently drops a mismatched write op, so the client must select the op from each characteristic's discovered properties — never hardcode it.
+- Commands (20-byte frames `AA 55 90 EB` + cmd + len + value + tail + 8-bit-sum checksum): `0x97` device info, `0x96` cell info, `0x6C` **set-RTC** (u32 LE seconds since 2020-01-01 00:00 AEDT in the official app's frames; the tail bytes are recycled app buffer garbage), `0xA1` logbook.
+- **Session opener (fw 19.31):** the 0x02 cell stream starts only after `0x97` then `0x96` land in that order in one session; the official app follows with `0x6C` — its full opener trilogy goes down FFE2. There is **no auth anywhere on this path**; the app's PIN never appears on the wire.
+- **The BMS piezo-acks every command frame received** — design every client to go silent once streaming.
+- Frame versions in the reference taxonomy: `JK04 (0x01)`, `JK02_24S (0x02)`, `JK02_32S (0x03)`. The PB2A16S20P fw 19.31 cell-info frames decode with the JK02_32S-style layout — but the shipped offsets were **pinned from live captures** of this fleet (cell mask @70, pack V @150, I @158, SOC @173, wire-warn @146; see `jk_proto.c`) and cross-checked against an independent RS485 aggregator, not assumed from the reference.
+- Min response ~300 bytes; frames span multiple notifications — reassemble by length + checksum before decode. Tolerate interleaved junk: the Telink-module unit emits an `AT\r\n` heartbeat (~7/s, even while streaming) and short pack-voltage ticker frames on FFE2 notify; the reassembler discards both.
 - Cell wire resistances and the **per-wire warning bitmask at byte offset 114** (one bit per cell/wire) are in the cell-info (`0x96`) frame. "Wire resistance" is bit 0 of the main error bitmask.
 - Balance parameters come from a **separate settings read**, not cell-info. The reference component exposes `balance_trigger_voltage` (writable) and `balancing` (state bit) — port both the settings parse and the write-frame builder.
 
-> **Implementer action:** extract the exact settings-frame offsets, write-frame opcode/format, and login/auth handshake from the reference source and verify on a bench unit. Do not guess register layouts — this is a 60 kWh protection device.
+> **Implementer action (still open with the write path):** extract the exact settings-frame offsets and write-frame format from the reference source and verify against captures before enabling writes. Read/stream sessions carry no auth at all (measured); whether writes require the PIN on this firmware is unverified (O-5). Do not guess register layouts — this is a 60 kWh protection device.
 
 ---
 
@@ -233,7 +236,7 @@ Results acked on `jkbms/<bms_id>/ack` with `{cmd, id, status, detail, readback}`
 - **At boot, if the record exists:** restore the saved settings first thing, publish an alert (`measure_restored_after_reboot`) on the unit's `ack` topic, then clear the record.
 - The supervisor enforces `MEAS_TIMEOUT_MS` (default 120 s): expiry always restores the saved settings, whatever state the sequence is in. Config load asserts settle interval < `MEAS_TIMEOUT_MS`.
 - The `cmd/measure` ack includes the restore status; `restore_failed` is a loud error, never silent.
-- **App arbitration:** `cmd/measure` is refused with `deferred_app_active` while the app holds that unit. If the app connects mid-measurement, the measurement **aborts and restores the saved settings before the app session proceeds** (the 1–3 s link bring-up absorbs this) — otherwise step 5's restore would later clobber whatever the operator changed in the app.
+- **App arbitration:** `cmd/measure` is refused with `deferred_app_active` while the app holds that unit. If the app connects mid-measurement, the measurement **aborts and restores the saved settings before the app session proceeds** (the ~5 s link bring-up absorbs this) — otherwise step 5's restore would later clobber whatever the operator changed in the app.
 
 1. Record current balance settings.
 2. Set balance current low (reference floor ~0.3 A); ensure balancing enabled.
@@ -286,20 +289,23 @@ Some firmware emits false balance-wire-resistance warnings. `state/faults` expos
 
 ## 12. Config
 
-**Node A:** WiFi; MQTT host/user/pass; NTP server; the four `bms_id`s + target selection (name/address) per unit; BMS login PIN(s); `IDLE_DISCONNECT_MS`; `APP_LINK_TIMEOUT_MS`; `REACHABILITY_PROBE_S`; central link-pool size; central connection-interval range; per-key balance `[min,max]`; rate limit; arbitration mode (block/queue); measurement settle time + `MEAS_TIMEOUT_MS` (settle < timeout, asserted at config load); cell-count-toggle flag (default off); tunnel PING interval/timeout.
+Site-specific values (WiFi, MQTT broker, BMS PIN, tunnel host, **and the fleet table** — per-unit advertised name, `bms_id`, public address, count) live in one git-ignored file, `components/secret/secret.h` (`FLEET_BMS_TABLE`; documented in `secret.h.example`). **Unit selection is by burned-in public address with passive scanning** — JK names appear only in scan responses, and active scanning's SCAN_REQs chirp the units' piezos; address-only matching also forecloses ever mistaking Node B's clones (static-random addresses) for real units.
+
+**Node A:** `IDLE_DISCONNECT_MS`; `APP_LINK_TIMEOUT_MS`; `REACHABILITY_PROBE_S`; reconnect-pacing constants (hold base/cap, stable-session threshold); per-key balance `[min,max]`; rate limit; arbitration mode (block/queue); measurement settle time + `MEAS_TIMEOUT_MS` (settle < timeout, asserted at config load); cell-count-toggle flag (default off); tunnel PING interval/timeout. (No connection-interval config — the module's own L2CAP-requested parameters are accepted outright, §4.)
 **Node B:** WiFi; Node A host/port; four advertised identities (default: harvested names); advertising format (legacy connectable, default); `ADVERTISE_WHEN_DOWN` (default off); `TUNNEL_GRACE_MS`; random-address rotation flag; `WRITE_FAIL_LIMIT`; max connection slots.
 
 ## 13. Build / toolchain
 
-- ESP-IDF (pin a version). NimBLE. **Node B on a BLE 5.0 target (C3/S3/C6)** for four advertising sets. **Node A: any WiFi+BLE ESP32** (original WROOM/WROVER fine; no BLE 5.0 needed; not ESP8266 or H2). External-antenna board recommended for Node A at the battery.
-- Two firmware images (`node_a`, `node_b`) sharing a common `jk_proto` component ported from `syssi/esphome-jk-bms` — single source of truth for frame logic.
-- Node B registers **one** replica GATT table (§5) — no per-identity GATT servers. Raise NimBLE limits as needed: `MAX_CONNECTIONS` on A, and the ext-adv instance count on B (need 4 advertising sets).
+- ESP-IDF **v5.2.3** (pinned). NimBLE. **Node B on a BLE 5.0 target** (as built: ESP32-C3) for four advertising sets. **Node A: ESP32-S3 with PSRAM** (§2 — a plain C3 proved marginal under load).
+- Two firmware images (`node_a`, `node_b`) sharing a common `jk_proto` component adapted from `syssi/esphome-jk-bms`, with the decode offsets re-pinned from live PB2A16S20P captures — single source of truth for frame logic, host-native regression test in `tools/`.
+- Node B registers **one** replica GATT table (§5) — no per-identity GATT servers. Limits that matter: `NIMBLE_MAX_CONNECTIONS=4` on A; on B, the ext-adv instance count (≥4) **and the controller activity budget** — each CONNECTABLE adv set costs **2** activities, so four clone sets need `BT_CTRL_BLE_MAX_ACT` ≥ 8 (as built: 10; the default 6 fit exactly three sets and the fourth failed `ext_adv_configure` with HCI 0x07 Memory Capacity Exceeded).
+- B's four static-random clone addresses are minted once and persisted in NVS — phones dedupe scan lists by address, so per-boot random addresses turn every B reboot into four "new" devices plus stale ghosts.
 
 ## 14. Test plan
 
 1. **Decode parity:** captured frames through `jk_proto` vs ESPHome output must match, incl. offset-114 bitmask — for every frame version present in the fleet.
 2. **Four-identity visibility:** app scan lists all four by name; each connects and shows correct live data for the right unit (routing check for the shared-table design — deliberately verify unit N's data never appears under identity M). A second concurrent connection from another phone is accepted-then-terminated; the first session is unaffected.
-3. **Switch:** disconnect in app, connect to another; previous set resumes advertising; new unit's real link comes up within ~1–3 s; no leaked BLE slots.
+3. **Switch:** disconnect in app, connect to another; previous set resumes advertising; new unit's real link comes up within ~5 s (app-attach driver); no leaked BLE slots.
 4. **Read path:** Node-RED sees per-unit cells/summary/settings/faults; failed resistances are null not 0.
 5. **Write path:** `cmd/balance/set` on a bench BMS changes value; readback confirms and updates `state/settings` + B's cache; out-of-scope + out-of-range rejected.
 6. **Arbitration:** app on a unit → automation write deferred/blocked per policy; app writes unaffected. App changes a setting then disconnects → post-session re-read updates retained settings.
@@ -307,19 +313,19 @@ Some firmware emits false balance-wire-resistance warnings. `state/faults` expos
 8. **Measurement crash-restore + abort:** power-cycle Node A mid-measurement → boot restores saved balance settings and publishes the alert. Connect the app to that unit mid-measurement → measurement aborts and settings are restored before the app session proceeds.
 9. **Tunnel drop mid-session:** (a) blip shorter than `TUNNEL_GRACE_MS` → the app session survives; resync (`TABLE_REQ` → state → `CLIENT` replay) reconciles A and grace-queued writes flush. (b) Longer outage → B drops the app + pauses advertising; on reconnect, full resync and normal operation resumes.
 10. **MTU re-fragmentation:** with a test client negotiating a small MTU, verify a full ~300 B cell-info frame reassembles correctly through B's re-chunking.
-11. **Cold start from NVS:** boot A + B with all BMS unreachable → B builds from the persisted blueprint, advertises nothing; power a BMS on → its identity appears. Repeat with Node-RED polling disabled — the supervisor probe alone must bring it back.
+11. **Cold start from NVS:** boot A + B with all BMS unreachable → B builds from the persisted blueprint, advertises nothing; power a BMS on → its identity appears (the supervisor probe alone must bring it back; there is no polling).
 12. **Resilience:** kill tunnel / MQTT / each real link independently; confirm degraded behaviour + clean recovery; `bridge/status` LWT flips on A death.
-13. **Concurrency ceiling:** app on unit 2 + Node-RED polling units 1/3/4; confirm link-pool behaviour and no starvation.
-14. **Soak:** 72 h with periodic app connects/switches, Node-RED polling, forced disconnects; no TWDT resets, no slot leaks.
+13. **Concurrency ceiling:** app on unit 2 while units 1/3/4 stream to MQTT; confirm link-pool behaviour and no starvation.
+14. **Soak:** 72 h with periodic app connects/switches, continuous MQTT streaming, forced disconnects; no TWDT resets, no slot leaks.
 
-## 15. Open items to resolve during implementation
+## 15. Open items
 
-- **O-1** Confirm each unit's frame version (JK04 / JK02_24S / JK02_32S); pin decode.
-- **O-2** Extract exact settings-frame layout, balance-write frame format, login handshake from reference; verify on a live unit before enabling writes.
-- **O-3** *(resolved)* Four identities on one Node B, app-driven selection, no control surface — this spec.
-- **O-4** Whether measurement mode may toggle cell count on this firmware. Default OFF until verified.
-- **O-5** Confirm BMS login PIN and whether balance writes require it on this firmware revision.
-- **O-6** Verify no false-alarm firmware quirk before wiring any hard alarm to the resistance warning.
-- **O-7** Confirm the JK iOS app surfaces all four advertising sets (legacy connectable PDUs recommended); validate advertise-while-connected for 1 connection + 3 sets on the chosen C3/S3/C6.
-- **O-8** Confirm the target chip's simultaneous adv-set + connection limits and RAM headroom under `menuconfig`.
-- **O-9** Verify at harvest that all four units expose an identical GATT layout (the §5 single-table design depends on it), and confirm which write mode the iOS app uses on `0xFFE1` (with vs without response).
+- **O-1** *(resolved)* All four units are JK-PB2A16S20P, fw 19.31, 16S; their cell-info frames decode with the JK02_32S-style layout, offsets pinned from live captures of this fleet and cross-checked against the independent RS485 aggregator (§8).
+- **O-2** *(open)* Extract exact settings-frame layout and balance-write frame format; verify against captures before enabling writes (`JK_ENABLE_WRITES` is a hard compile-time gate, currently 0).
+- **O-3** *(resolved)* Four identities on one Node B, app-driven selection, no control surface — this spec, verified in production.
+- **O-4** *(open)* Whether measurement mode may toggle cell count on this firmware. Default OFF until verified.
+- **O-5** *(open)* Whether balance writes require the PIN on this firmware revision — read/stream sessions carry no auth at all (measured; the PIN never appears on the wire).
+- **O-6** *(open)* Verify no false-alarm firmware quirk before wiring any hard alarm to the resistance warning.
+- **O-7** *(resolved)* The JK iOS app surfaces all four sets (legacy connectable PDUs) and advertise-while-connected holds — verified in daily use.
+- **O-8** *(resolved)* On the C3 controller each connectable adv set costs 2 activities: `BT_CTRL_BLE_MAX_ACT=10` as built (§13). RAM headroom fine on both nodes.
+- **O-9** *(resolved)* All four units expose the identical FFE0 service/characteristic UUID layout; the Telink-module unit differs only in characteristic write-type **properties**, handled per-link (§8). The iOS app writes its command channel (FFE2) without response on the majority module family.
