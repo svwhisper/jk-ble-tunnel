@@ -37,6 +37,8 @@ typedef struct {
     uint16_t  val_handle;     /* 0xFFE1 value handle                          */
     uint16_t  ffe2_handle;    /* 0xFFE2 value handle (0 if absent)            */
     uint16_t  cccd_handle;    /* 0xFFE1 CCCD                                  */
+    uint8_t   ffe1_props;     /* discovered char properties — pick the ATT   */
+    uint8_t   ffe2_props;     /*   write op each char actually permits        */
     jk_reasm_t reasm;
     harvest_entry_t table;    /* discovered blueprint                        */
     bool      table_ready;
@@ -340,6 +342,23 @@ static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
     }
 }
 
+/* ---- write-op selection ------------------------------------------------- */
+/* Unit 0's Telink/Nordic module (A4:C1:38, gattdump 2026-08-29 evening)
+ * exposes FFE1 as notify+write-NO-rsp (0x14) and FFE2 as write+notify (0x18)
+ * — the exact INVERSE of the C8:47:80 trio's write types. ATT silently drops
+ * a Write Request to a char without the write property AND a Write Command to
+ * one without write-no-rsp, so every command this client (and the frozen-
+ * constant era before it) ever sent to unit 0 was discarded on arrival —
+ * the whole "connects but never streams" record. Choose the op the char
+ * permits; where a char permits the trio's proven op (or props are unknown,
+ * 0), keep current behavior. */
+static bool ffe1_needs_write_cmd(const link_t *l)
+{ return !(l->ffe1_props & BLE_GATT_CHR_PROP_WRITE) &&
+          (l->ffe1_props & BLE_GATT_CHR_PROP_WRITE_NO_RSP); }
+static bool ffe2_needs_write_req(const link_t *l)
+{ return !(l->ffe2_props & BLE_GATT_CHR_PROP_WRITE_NO_RSP) &&
+          (l->ffe2_props & BLE_GATT_CHR_PROP_WRITE); }
+
 /* ---- GATT discovery callbacks (host task) ------------------------------ */
 /* NIMBLE-PASS: these signatures follow the NimBLE host API; verify the exact
  * argument structs (ble_gatt_error, ble_gatt_svc, ble_gatt_chr, ble_gatt_dsc)
@@ -349,10 +368,13 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
 {
     link_t *l = arg;
     if (err && err->status != 0 && err->status != BLE_HS_EDONE) return 0;
-    if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR2_UUID)
+    if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR2_UUID) {
         l->ffe2_handle = chr->val_handle;   /* idx-1 app writes route here */
+        l->ffe2_props  = chr->properties;
+    }
     if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR_UUID) {
         l->val_handle  = chr->val_handle;
+        l->ffe1_props  = chr->properties;
         l->cccd_handle = chr->val_handle + 1;   /* CCCD is typically val+1    */
         /* Record the blueprint (single characteristic for JK). */
         l->table.char_count = 1;
@@ -361,9 +383,17 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
         l->table_ready = true;
     }
     if (err && err->status == BLE_HS_EDONE) {
-        /* Discovery finished: subscribe to notifications (write CCCD = 0x0001). */
+        /* Discovery finished: subscribe to notifications (write CCCD = 0x0001).
+         * Back-to-back GATT procedures are safe — NimBLE queues them (the
+         * connect path already stacks MTU-exchange + svc discovery). */
         uint8_t v[2] = {0x01, 0x00};
-        ble_gattc_write_flat(ch, l->cccd_handle, v, sizeof(v), NULL, NULL); /* NIMBLE-PASS */
+        if (l->cccd_handle)
+            ble_gattc_write_flat(ch, l->cccd_handle, v, sizeof(v), NULL, NULL); /* NIMBLE-PASS */
+        /* Unit 0's module carries notify on FFE2 too — its replies may
+         * surface there. Same val+1 CCCD convention; a module without that
+         * descriptor just returns a harmless ATT error. */
+        if (l->ffe2_handle && (l->ffe2_props & BLE_GATT_CHR_PROP_NOTIFY))
+            ble_gattc_write_flat(ch, l->ffe2_handle + 1, v, sizeof(v), NULL, NULL);
         set_link_state(l->bms_id, LINK_UP, true);
         /* A TXN_CONNECT completes here. */
         if (l->txn_active && l->txn.kind == TXN_CONNECT) {
@@ -614,7 +644,9 @@ static void exec_request(const bms_request_t *req)
         int n = jk_build_read_cmd(req->opcode, cmd, sizeof(cmd));
         l->txn_active = true; l->txn = *req;
         l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
-        int rc = ble_gattc_write_flat(l->conn_handle, l->val_handle, cmd, n, NULL, NULL); /* NIMBLE-PASS */
+        int rc = ffe1_needs_write_cmd(l)
+               ? ble_gattc_write_no_rsp_flat(l->conn_handle, l->val_handle, cmd, n)
+               : ble_gattc_write_flat(l->conn_handle, l->val_handle, cmd, n, NULL, NULL); /* NIMBLE-PASS */
         if (rc) {   /* proc-pool exhaustion etc: fail LOUDLY, don't fake a txn */
             l->txn_active = false;
             ESP_LOGW(TAG, "poll 0x%02x write bms %u rc=%d", req->opcode, req->bms_id, rc);
@@ -623,13 +655,25 @@ static void exec_request(const bms_request_t *req)
         break;
     }
     case TXN_RAW_WRITE: {
-        /* App write relayed verbatim. idx 1 = the FFE2 write-no-rsp command
-         * characteristic (the clone mirrors it); everything else = FFE1.
-         * FFE1 completion = ATT write ack (on_gatt_write_done). */
+        /* App write relayed verbatim. idx 1 = the FFE2 command characteristic
+         * (the clone mirrors it); everything else = FFE1. FFE1 write-with-rsp
+         * completion = ATT write ack (on_gatt_write_done). Op per discovered
+         * props — see ffe1_needs_write_cmd/ffe2_needs_write_req. */
         if (req->idx == 1 && l->ffe2_handle) {
-            ble_gattc_write_no_rsp_flat(l->conn_handle, l->ffe2_handle,
-                                        req->payload, req->payload_len);    /* NIMBLE-PASS */
+            int wrc = ffe2_needs_write_req(l)
+                    ? ble_gattc_write_flat(l->conn_handle, l->ffe2_handle,
+                                           req->payload, req->payload_len, NULL, NULL)
+                    : ble_gattc_write_no_rsp_flat(l->conn_handle, l->ffe2_handle,
+                                                  req->payload, req->payload_len); /* NIMBLE-PASS */
+            if (wrc) ESP_LOGW(TAG, "ffe2 write bms %u rc=%d", req->bms_id, wrc);
             respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
+            break;
+        }
+        if (ffe1_needs_write_cmd(l)) {      /* no ATT ack exists for a Write Command */
+            int wrc = ble_gattc_write_no_rsp_flat(l->conn_handle, l->val_handle,
+                                                  req->payload, req->payload_len);
+            respond(req->bms_id, req->cmd_id, wrc ? RESP_GATT_ERR : RESP_OK,
+                    NULL, 0, JK_REC_NONE);
             break;
         }
         l->txn_active = req->response_needed; l->txn = *req;

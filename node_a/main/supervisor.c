@@ -223,6 +223,18 @@ static void maintenance_tick(void)
             }
         }
 
+        /* Silent-link opener fallback: a held link that has produced NO frame
+         * a few seconds in gets the FFE2 opener trilogy blind. The decoder's
+         * frame-gated trigger covers the trio (they frame within ~1 s of the
+         * FFE1 bootstrap); unit 0's module ignores FFE1 entirely and only
+         * heartbeats "AT\r\n", so nothing frame-shaped ever arrives to unlock
+         * the trilogy — send it anyway and let FFE2 be the door. One-shot per
+         * session inside decoder_send_opener; no-op until SNTP is up. */
+        if (!ble_quiesce && rt.link_held &&
+            rt.last_seen_us < s_linkup_us[id] &&
+            now - s_linkup_us[id] > 4000000LL)
+            decoder_send_opener(id);
+
         /* Reachability-probe floor for unreachable units (spec §4). */
         if (!ble_quiesce && cfg_name_for(id)[0] != '\0' &&
             rt.link == LINK_UNREACHABLE && now >= s_hold_until_us[id] &&

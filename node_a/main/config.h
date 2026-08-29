@@ -31,11 +31,12 @@
  * little-endian as NimBLE presents them (reversed from display order). */
 typedef struct { const char *name; uint8_t bms_id; uint8_t addr[6]; } cfg_bms_target_t;
 static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = {
-    /* PARKED (again) 2026-08-29: the Telink module (different HW from the
-     * C8:47:80 trio) connects but never harvests/streams even with 0x6C and
-     * the relaxed layout check. Needs its own investigation — remote, via
-     * llevent + bounded rawcap. Production ships as a 3-bank fleet for now. */
-    { NULL,       0, {0} },                    /* BMS_0-00 A4:C1:38:00:86:05 PARKED */
+    /* Un-parked 2026-08-29 evening (the "get bms 0 working" push): its
+     * connects-but-never-streams record predates the FFE2 opener trilogy,
+     * the gentle client AND the sleep/latch model — and the Telink GATT
+     * table (different HW from the C8:47:80 trio) may break the CCCD=val+1
+     * assumption in ble_owner.c. Diagnose live: gattdump on first connect. */
+    { "BMS_0-00", 0, {0x05,0x86,0x00,0x38,0xC1,0xA4} },   /* A4:C1:38:00:86:05 Telink */
     /* Un-parked 2026-08-29 for the 0x6C test: its "chronic flakiness"
      * predates the stream-enable discovery and may vanish with it. */
     { "BMS 1-01", 1, {0xD5,0x1A,0x3A,0x80,0x47,0xC8} },   /* C8:47:80:3A:1A:D5 */

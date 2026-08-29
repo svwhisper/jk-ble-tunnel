@@ -2,7 +2,35 @@
 
 Living design/status doc. Keep current alongside code changes.
 
-## READ FIRST — 2026-08-29 EOD: APP-VIA-TUNNEL WORKS ON ALL BANKS
+## READ FIRST — 2026-08-29 EOD: ALL FOUR BANKS STREAM (unit 0 SOLVED)
+
+### UNIT 0 SOLVED (2026-08-29 evening) — it was OUR ATT write ops all along
+Un-parked and streaming full 16-cell data within minutes of the fix. The
+Telink-OUI module (A4:C1:38:00:86:05, Nordic Secure-DFU service 0xFE59 on
+board) exposes the SAME FFE0/FFE1/FFE2 chars but with **INVERTED write
+types vs the C8:47:80 trio**: FFE1 = notify+write-NO-rsp (0x14), FFE2 =
+write+notify (0x18). ATT silently drops a Write Request to a char without
+the write property (and a Write Command without write-no-rsp) — so EVERY
+command any era of this client sent to unit 0 was discarded on arrival.
+"Connects but never streams" was never the unit; it was us.
+Fix (ble_owner.c): record char properties at discovery; pick the ATT op
+each char permits (trio behavior unchanged — props that allow the proven
+op keep it). Also subscribe FFE2's CCCD when it carries notify, and a
+supervisor **silent-link opener fallback**: a held link with no frame 4 s
+after link-up gets the FFE2 trilogy blind (decoder_send_opener; the
+frame-gated trigger alone deadlocked on this module — no frames until
+opener, no opener until frames).
+Module personality (harmless, all captured): "AT\r\n" heartbeat ~7/s on
+FFE1 notify (idle AND while streaming — reasm discards it), and little
+12-byte pack-voltage ticker frames on FFE2 notify (u16 LE mV + zeros).
+Same JK02_32S frame layout; cells/wire-R decode with the trio's pinned
+offsets. TOPOLOGY (owner, 2026-08-29): the JK units are NOT in the DC path
+— they sense cell voltages + balance wires only, so JK-reported current/
+power/SOC/cycles are meaningless on EVERY bank (Lynx/iBMS own those).
+Bank 0's cycles:0 / SOC 100 / I≈0 are expected, not decode errors. The
+meaningful BLE-unique payload remains cell volts + wire resistance.
+
+## Prior READ FIRST — 2026-08-29 EOD: APP-VIA-TUNNEL WORKS ON ALL BANKS
 
 **STATUS: BLE ON (persisted; owner re-armed 13:05).** Victron currently
 ignores iBMS+JKs; the owner will re-enable iBMS charge control now that
@@ -73,7 +101,10 @@ garage — tune CFG_RECONNECT_HOLD_PROD_S if annoying). iBMS clean ALL day
 ### Open threads
 (1) Why/when the latch takes (rawcap matrix; app-direct vs clone timing).
 (2) Bank-1 ghost-connect NimBLE lead + the hold-bypass reconnect.
-(3) Unit 0 (Telink) never streams. (4) Owner re-enables iBMS charge control.
+(3) ~~Unit 0 never streams~~ SOLVED — see top block. Remaining unit-0 tails:
+    verify TUN-0 app session end-to-end; does this module sleep/latch at all
+    (6+ min unbroken on first contact + AT heartbeat suggest it never dozes)?
+(4) Owner re-enables iBMS charge control.
 (5) GitHub upload. (6) O-2/O-5 writes (JK_ENABLE_WRITES stays 0).
 (Resolved 08-29: duplicate TUN-3 advert after ~6 A-reboots — gone after a
 Node B restart + app restart; recurrence would point at B's adv-set table.)
