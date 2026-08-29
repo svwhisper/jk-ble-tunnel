@@ -37,9 +37,11 @@ had NO reset → permanent lock after the first write, replaced with a 3 s
 debounce. Measurement-mode writes split to their own gate
 `JK_ENABLE_MEASURE_WRITES=0` (still unported) so balance writes don't
 half-activate the measurement sequence. Host test 35/35 (builder vs app
-frames). NOT tested live: `balance_current`/`balancing_enabled` writes and
-the app-active defer (code identical path; app-capture + host test cover
-the frames). NEXT: if wanted, measurement-mode port (O-4) + those two live.
+frames). **All three registers live-verified on bank 1 2026-08-30**:
+trigger 0.012/0.014 V, current 1.5/2.0 A, enable false/true — each `ok`
+with matching readback, all reverted to baseline (0.010 V / 2 A / enabled).
+NOT tested live: app-active defer (identical code path). NEXT: if wanted,
+measurement-mode port (O-4).
 
 ## READ FIRST — 2026-08-29 EOD: ALL FOUR BANKS STREAM (unit 0 SOLVED)
 
