@@ -70,6 +70,8 @@ garage — tune CFG_RECONNECT_HOLD_PROD_S if annoying). iBMS clean ALL day
 (2) Bank-1 ghost-connect NimBLE lead + the hold-bypass reconnect.
 (3) Unit 0 (Telink) never streams. (4) Owner re-enables iBMS charge control.
 (5) GitHub upload. (6) O-2/O-5 writes (JK_ENABLE_WRITES stays 0).
+(Resolved 08-29: duplicate TUN-3 advert after ~6 A-reboots — gone after a
+Node B restart + app restart; recurrence would point at B's adv-set table.)
 
 ### The incident (11:42–12:20)
 Bank 3's JK latched **"CPUAux error"** (per-bank errors_bitmask 4) at 11:44,
