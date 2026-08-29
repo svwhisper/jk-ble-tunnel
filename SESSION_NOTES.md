@@ -12,10 +12,15 @@ for ~weekly app sessions (tweak params, view balance-wire resistance).**
 Continuous MQTT cell streaming is a nice-to-have only; the NR charge-stop
 guard gets whatever coverage falls out.
 
-**Verified live with the owner: the app works through TUN 1, 2 AND 3**
-(morning: TUN 2 only). For a bank that isn't currently latched (below), the
-TUN appears for ~25 s every ~5m20s — connect when it shows; once the app is
-on, its own traffic holds the session.
+**Verified live with the owner: the app works through TUN 1, 2 AND 3, and
+all three TUNs are visible CONTINUOUSLY (on-demand model, deployed to A+B
+end of day — owner confirmed "tun1 connected with data immediately").**
+How it works: B advertises any identity that is not UNREACHABLE (mortal
+banks sit at REACHABLE_IDLE between snapshots); when an app attaches to a
+clone, A's app-attach driver brings the real link up within ~5 s (bypassing
+all holds) and re-raises it if the module sleeps mid-session. A reports
+parked units and BLE-off as UNREACHABLE so dead clones stay dark (the TUN-0
+ghost fix moved to the A side).
 
 ### THE DECODES (owner's phone captured through the clones)
 - **0x6C = SET RTC.** u32 LE seconds since 2020-01-01 00:00 **AEDT**

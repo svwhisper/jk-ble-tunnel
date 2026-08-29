@@ -88,12 +88,13 @@ static bool should_advertise(uint8_t id)
 {
     if (s_set[id].connected) return false;              /* connected set is silent */
     if (!tunnel_cli_up()) return false;                 /* no tunnel => lie (spec §11) */
-    /* LINK_UP only, not merely != UNREACHABLE: A holds every live bank's link
-     * permanently (pool == fleet, idle-disconnect off), so anything else means
-     * the clone has no data behind it. REACHABLE_IDLE notably includes parked
-     * unit 0 — advertising it gave the app a connectable ghost that could
-     * never serve ("TUN 0 won't connect", 2026-08-29). */
-    if (s_set[id].link != LINK_UP && !CFG_ADVERTISE_WHEN_DOWN) return false;
+    /* On-demand model (2026-08-29 evening): advertise anything REACHABLE —
+     * mortal banks sit at REACHABLE_IDLE between their ~25 s snapshot windows
+     * and the owner should not wait ~5 min for a TUN to appear; A now brings
+     * the real link up within seconds of an app attaching (app-attach driver)
+     * and reports parked units / BLE-off as UNREACHABLE, so dead clones stay
+     * dark (the "TUN 0 ghost" fix moved to the A side). */
+    if (s_set[id].link == LINK_UNREACHABLE && !CFG_ADVERTISE_WHEN_DOWN) return false;
     return s_set[id].name[0] != '\0';
 }
 

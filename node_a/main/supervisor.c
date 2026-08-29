@@ -118,7 +118,12 @@ static void maintenance_tick(void)
         /* Push reachability changes to Node B so it starts/stops advertising
          * this identity (spec §4/§5). */
         if (rt.link != s_last_link[id]) {
-            tunnel_send_link(id, rt.link);
+            /* Same parked/BLE-off => UNREACHABLE mapping as tunnel_srv_refresh
+             * (B's adv gate is now !=UNREACHABLE; a raw push for parked unit 0
+             * would ghost-advertise TUN 0 until the next refresh). */
+            tunnel_send_link(id, (cfg_name_for(id)[0] == '\0' ||
+                                  !ble_owner_ble_enabled())
+                                     ? LINK_UNREACHABLE : rt.link);
             /* Session bootstrap on every link-up: 0x97 then 0x96 — the pair
              * (in this order) is what makes fw 19.31 start streaming 0x02
              * cell frames; see the round-robin note above. */
@@ -167,6 +172,20 @@ static void maintenance_tick(void)
                 }
             }
             s_last_link[id] = rt.link;
+        }
+
+        /* APP-ATTACH DRIVER (on-demand model, 2026-08-29 evening): the phone
+         * is on this identity's clone but the real link is down — bring it up
+         * NOW and keep bringing it up (module slept mid-session). User intent
+         * overrides every hold/ladder. 5 s cadence; beep-free for the same
+         * clear-pending reason as the connect driver below. */
+        if (!ble_quiesce && cfg_name_for(id)[0] != '\0' &&
+            rt.app_connected && !rt.link_held) {
+            static int64_t s_app_drive_us[CFG_NUM_UNITS];
+            if (now - s_app_drive_us[id] > 5000000LL) {
+                s_app_drive_us[id] = now;
+                arbiter_poll(id, JK_CMD_DEVICE_INFO);
+            }
         }
 
         /* CONNECT DRIVER: a unit that is enabled but not connected gets a

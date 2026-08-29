@@ -16,6 +16,8 @@
 #include "queues.h"
 #include "config.h"
 #include "arbiter.h"
+#include "ble_owner.h"       /* ble_owner_ble_enabled: BLE-off => report all
+                              * links UNREACHABLE so B's clones go dark */
 #include "mqtt_task.h"
 #include "state_cache.h"
 #include "nvs_store.h"
@@ -109,7 +111,13 @@ void tunnel_srv_refresh(void)
         if (!parked && nvs_get_harvest(id, &h) && h.valid && h.name[0])
             enqueue(TUN_IDENT, id, (const uint8_t *)h.name, strlen(h.name));
         bms_runtime_t rt; state_get_runtime(id, &rt);
-        uint8_t st = (uint8_t)rt.link; enqueue(TUN_LINK, id, &st, 1);
+        /* Report parked units (and everything while BLE is globally off) as
+         * UNREACHABLE: B's adv gate now advertises any identity that is not
+         * UNREACHABLE (on-demand model, 2026-08-29 evening), so this mapping
+         * is what keeps dead clones dark. */
+        tunnel_link_state_t eff = rt.link;
+        if (parked || !ble_owner_ble_enabled()) eff = LINK_UNREACHABLE;
+        uint8_t st = (uint8_t)eff; enqueue(TUN_LINK, id, &st, 1);
         /* Prime read caches from the current cell/settings snapshot. */
         /* (READ_CACHE priming filled in once decode offsets are bench-verified.) */
     }
