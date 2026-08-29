@@ -216,7 +216,12 @@ Results acked on `jkbms/<bms_id>/ack` with `{cmd, id, status, detail, readback}`
 - Cell wire resistances and the **per-wire warning bitmask at byte offset 114** (one bit per cell/wire) are in the cell-info (`0x96`) frame. "Wire resistance" is bit 0 of the main error bitmask.
 - Balance parameters come from a **separate settings read**, not cell-info. The reference component exposes `balance_trigger_voltage` (writable) and `balancing` (state bit) — port both the settings parse and the write-frame builder.
 
-> **Implementer action (still open with the write path):** extract the exact settings-frame offsets and write-frame format from the reference source and verify against captures before enabling writes. Read/stream sessions carry no auth at all (measured); whether writes require the PIN on this firmware is unverified (O-5). Do not guess register layouts — this is a 60 kWh protection device.
+**Settings-write registers (DECODED from the app's own frames, fw 19.31, 2026-08-30):** each write is the universal 20-byte register frame `AA 55 90 EB | reg | 0x04 | u32 LE value | 8 don't-care | sum8`, sent to FFE2:
+- `0x06` balance_trigger_voltage — u32 LE **millivolts**, and it is a **DELTA** (the app displayed 0.010 V), not an absolute cell voltage.
+- `0x13` balance_current — u32 LE **milliamps** (the PB2A16S20P balances to 2 A).
+- `0x1F` balancing_enabled — u32 LE 0/1.
+
+No login/auth appears on the wire for writes (captured full write sessions); the app's password prompt is a local UI gate. The checksum is validated over whatever tail bytes are sent, so a zero tail with a self-consistent sum is accepted (proven by our 0x6C set-RTC and live balance writes).
 
 ---
 
@@ -261,13 +266,14 @@ Trend only samples captured under comparable conditions. Log SOC + balance curre
 - `balancing_enabled` (bool)
 - (add only balance-related settings confirmed writable on target firmware)
 
-### Validation pipeline (every write)
-1. **Whitelist check.**
-2. **Range clamp** — per-key `[min,max]`; reject out-of-range (don't silently clamp), log.
-3. **Auth handshake** — replay login before the write (PINs seen in the wild: 1234 / 123456; real one held in Node A config, §12).
-4. **Serialise through the per-BMS arbiter** — never interleave with an app exchange on that unit.
-5. **Write, then read back** — re-read settings, confirm; publish `readback`, **update retained `state/settings`, and push `READ_CACHE` to B** so the app never reads a stale value. On mismatch: `status: readback_failed`, no blind retry.
-6. **Rate limit** — default: one balance write per charge cycle unless overridden; coalesce rapid writes.
+### Validation pipeline (every write) — as built
+1. **One key per command** — reject multi-key (`status: one_key_per_command`); the app writes one register per frame and single-key keeps readback unambiguous.
+2. **Whitelist check** (`rejected_out_of_scope`), enforced at the builder too.
+3. **Range clamp** — per-key `[min,max]` in human units; reject out-of-range (`out_of_range`), don't silently clamp. Ranges: trigger 0.003–0.100 V (delta), current 0.10–2.00 A, enabled 0/1.
+4. **No auth** — writes need no login on fw 19.31 (measured); the login builder is a no-op.
+5. **Serialise through the per-BMS arbiter** — never interleave with an app exchange; the write goes to FFE2 with the op the char's discovered props permit.
+6. **Readback confirm** — the write to FFE2 gets no ATT ack, and the BMS pushes settings frames only sparsely, so the arbiter actively re-reads: it nudges a `0x96` cell-info poll every ~4 s (only 0x96 elicits a fresh `0x01` settings frame on fw 19.31; 0x97 does not) and compares the next decoded settings frame to the target. **Only a match is definitive** (`status: ok` + `readback`); a pre-write frame carrying the old value is ignored, not failed (it races the ~5 s idle-link connect). Deadline 15 s → `written_unverified` (honest — never a false failure; retained `state/settings` updates from the frame regardless).
+7. **Rate limit** — minimum interval between writes per unit (debounce, default 3 s). *(Not "per charge cycle": writes are occasional operator commands, and per-cycle needed a charge-cycle detector that never existed.)*
 
 ### Arbitration policy (default)
 - **App connected to that unit → MQTT-sourced writes BLOCKED**, acked `status: deferred_app_active`, optionally queued (config flag) to apply on app disconnect. Human-in-app takes precedence.
@@ -323,10 +329,10 @@ Site-specific values (WiFi, MQTT broker, BMS PIN, tunnel host, **and the fleet t
 ## 15. Open items
 
 - **O-1** *(resolved)* All four units are JK-PB2A16S20P, fw 19.31, 16S; their cell-info frames decode with the JK02_32S-style layout, offsets pinned from live captures of this fleet and cross-checked against the independent RS485 aggregator (§8).
-- **O-2** *(open)* Extract exact settings-frame layout and balance-write frame format; verify against captures before enabling writes (`JK_ENABLE_WRITES` is a hard compile-time gate, currently 0).
+- **O-2** *(resolved)* Balance-write frame format decoded from the app's own frames and live-verified: regs 0x06/0x13/0x1F (§8/§10). `JK_ENABLE_WRITES=1`. Measurement-mode's own write steps remain gated off separately (`JK_ENABLE_MEASURE_WRITES=0`, unported).
 - **O-3** *(resolved)* Four identities on one Node B, app-driven selection, no control surface — this spec, verified in production.
 - **O-4** *(open)* Whether measurement mode may toggle cell count on this firmware. Default OFF until verified.
-- **O-5** *(open)* Whether balance writes require the PIN on this firmware revision — read/stream sessions carry no auth at all (measured; the PIN never appears on the wire).
+- **O-5** *(resolved)* Balance writes require NO PIN on fw 19.31 — captured full write sessions show no login frame on the wire; the app's password prompt is a local UI gate. `jk_build_login` is a no-op stub.
 - **O-6** *(open)* Verify no false-alarm firmware quirk before wiring any hard alarm to the resistance warning.
 - **O-7** *(resolved)* The JK iOS app surfaces all four sets (legacy connectable PDUs) and advertise-while-connected holds — verified in daily use.
 - **O-8** *(resolved)* On the C3 controller each connectable adv set costs 2 activities: `BT_CTRL_BLE_MAX_ACT=10` as built (§13). RAM headroom fine on both nodes.

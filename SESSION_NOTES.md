@@ -2,6 +2,45 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## READ FIRST — 2026-08-30: BALANCE WRITES LIVE (O-2/O-5 resolved)
+
+Settings writes are ENABLED and live-verified end-to-end over MQTT on a
+sealed garage bank, no app involved. `JK_ENABLE_WRITES=1`.
+
+**Register map** (decoded from the app's OWN write frames via the clones):
+`0x06` balance_trigger_voltage (u32 LE mV, a **delta**), `0x13`
+balance_current (u32 LE mA), `0x1F` balancing_enabled (u32 LE 0/1). Frame =
+`AA5590EB|reg|04|u32|8 junk|sum8` → **FFE2**. **No auth on the wire** (O-5):
+no login frame in captured write sessions; the app password prompt is local
+UI only. Checksum validated over whatever tail is sent (zero tail + self-sum
+works).
+
+**Pipeline** (`arbiter.c handle_balance_set`): one-key-per-command →
+whitelist → range clamp → app-active defer → 3 s debounce → build → FFE2
+write (property-aware op, bank 0's inverted module included) → readback.
+**Readback**: FFE2 write has no ATT ack and the BMS pushes settings frames
+sparsely, so the arbiter nudges a `0x96` cell-info poll every ~4 s (ONLY
+0x96 elicits a fresh 0x01 settings frame on fw 19.31 — 0x97 does NOT) and
+compares the next decoded frame to the target. Only a MATCH is definitive
+(`ok`+readback); a pre-write frame with the old value is IGNORED not failed
+(races the ~5 s idle-link connect — this bit us live); deadline 15 s →
+`written_unverified` (never a false failure).
+
+MQTT: `jkbms/<id>/cmd/balance/set` `{"balance_trigger_voltage":0.010}` (one
+key). Acks on `jkbms/<id>/ack`: `ok` / `out_of_range` /
+`rejected_out_of_scope` / `one_key_per_command` / `deferred_app_active` /
+`rate_limited` / `written_unverified`. All verified live 2026-08-30.
+
+Corrected en route: whitelist ranges (trigger is a DELTA 0.003–0.100 V not
+absolute; current up to 2 A); the "one write per charge cycle" rate limit
+had NO reset → permanent lock after the first write, replaced with a 3 s
+debounce. Measurement-mode writes split to their own gate
+`JK_ENABLE_MEASURE_WRITES=0` (still unported) so balance writes don't
+half-activate the measurement sequence. Host test 35/35 (builder vs app
+frames). NOT tested live: `balance_current`/`balancing_enabled` writes and
+the app-active defer (code identical path; app-capture + host test cover
+the frames). NEXT: if wanted, measurement-mode port (O-4) + those two live.
+
 ## READ FIRST — 2026-08-29 EOD: ALL FOUR BANKS STREAM (unit 0 SOLVED)
 
 ### UNIT 0 SOLVED (2026-08-29 evening) — it was OUR ATT write ops all along
