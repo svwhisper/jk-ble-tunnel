@@ -55,7 +55,11 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
 {
     if (len < 5 || buf[0]!=0xAA || buf[1]!=0x55 || buf[2]!=0x90 || buf[3]!=0xEB)
         return;
-    static const uint8_t recs97[] = { 0x03, 0 };
+    /* A live armed unit never answers a 97 with a lone devinfo — settings
+     * and cell frames flow around it. Every replay rejection today was a
+     * lone devinfo into dead air; every acceptance had a stream around it.
+     * Answer 97 with the full synthetic burst. */
+    static const uint8_t recs97[] = { 0x03, 0x01, 0x02, 0 };
     static const uint8_t recs96[] = { 0x01, 0x02, 0 };
     const uint8_t *recs = buf[4]==0x97 ? recs97
                         : buf[4]==0x96 ? recs96 : NULL;
@@ -151,6 +155,7 @@ static int dis_access(uint16_t conn, uint16_t attr,
     int id = identity_for_conn(conn);
     uint16_t u = ble_uuid_u16(ctxt->chr->uuid);
     const char *str = NULL;
+    ESP_LOGI(TAG, "id %d DIS read 0x%04X", id, u);
     switch (u) {
     case CHR_MANUFACTURER: str = "JK-BMS";        break;
     case CHR_MODEL:        str = "JK-PB2A16S20P"; break;
