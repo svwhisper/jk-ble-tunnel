@@ -43,6 +43,28 @@ void nb_get_cache(uint8_t id, uint8_t idx, nb_cache_t *out)
     lock(); *out = s_id[id].cache[idx]; unlock();
 }
 
+/* rec: JK record type — 0x03 device-info, 0x02 cell-info (others ignored). */
+void nb_set_warm(uint8_t id, uint8_t rec, const uint8_t *frame, uint16_t len)
+{
+    if (id >= CFG_NUM_UNITS) return;
+    if (len > NB_CACHE_MAX) len = NB_CACHE_MAX;
+    lock();
+    nb_cache_t *w = rec == 0x03 ? &s_id[id].warm_devinfo
+                  : rec == 0x02 ? &s_id[id].warm_cellinfo : NULL;
+    if (w) { w->len = len; memcpy(w->data, frame, len); }
+    unlock();
+}
+void nb_get_warm(uint8_t id, uint8_t rec, nb_cache_t *out)
+{
+    out->len = 0;
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    nb_cache_t *w = rec == 0x03 ? &s_id[id].warm_devinfo
+                  : rec == 0x02 ? &s_id[id].warm_cellinfo : NULL;
+    if (w) *out = *w;
+    unlock();
+}
+
 void nb_set_conn(uint8_t id, bool c, uint16_t h)
 {
     if (id >= CFG_NUM_UNITS) return;

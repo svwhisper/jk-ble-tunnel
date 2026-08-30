@@ -76,7 +76,16 @@ static void on_frame(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
     case TUN_NOTIFY:                          /* [idx][complete frame] */
         /* Cache refresh ONLY. The app stream is TUN_RAW (verbatim chunks) —
          * forwarding reassembled frames here too would duplicate the data. */
-        if (len >= 1) nb_set_cache(id, pl[0], pl+1, len-1);
+        if (len >= 1) {
+            nb_set_cache(id, pl[0], pl+1, len-1);
+            /* Warm-start cache by frame type: a JK notify frame is
+             * 55 AA EB 90 <rec> ... — keep the last device-info (0x03) and
+             * cell-info (0x02) so B can answer the app's opener from cache
+             * while a sleeping module is being woken (2026-08-30 fix). */
+            const uint8_t *fr = pl + 1; uint16_t fl = len - 1;
+            if (fl >= 6 && fr[0]==0x55 && fr[1]==0xAA && fr[2]==0xEB)
+                nb_set_warm(id, fr[4], fr, fl);
+        }
         break;
     case TUN_RAW:                             /* [idx][verbatim BMS chunk] */
         if (len >= 1) ble_periph_forward_notify(id, pl[0], pl+1, len-1);

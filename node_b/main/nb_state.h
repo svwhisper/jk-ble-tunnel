@@ -36,6 +36,14 @@ typedef struct {
 
     /* per-idx read cache */
     nb_cache_t cache[NB_MAX_CHARS];
+
+    /* Warm-start frames (spec §-fix 2026-08-30): the last COMPLETE device-info
+     * (0x03) and cell-info (0x02) frames seen from A, kept so B can answer the
+     * app's opener (0x97/0x96) instantly from cache when the real link is
+     * asleep — otherwise the app times out ("request device information
+     * failure") waiting for A to wake and scan-find a sleeping module. */
+    nb_cache_t warm_devinfo;   /* last 0x03 frame */
+    nb_cache_t warm_cellinfo;  /* last 0x02 frame */
 } nb_identity_t;
 
 typedef struct {
@@ -55,6 +63,10 @@ void nb_set_ident_name(uint8_t bms_id, const char *name);
 void nb_set_link(uint8_t bms_id, tunnel_link_state_t s);
 void nb_set_cache(uint8_t bms_id, uint8_t idx, const uint8_t *data, uint16_t len);
 void nb_get_cache(uint8_t bms_id, uint8_t idx, nb_cache_t *out);
+
+/* Warm-start frame cache (device-info 0x03 / cell-info 0x02). `rec` selects. */
+void nb_set_warm(uint8_t bms_id, uint8_t rec, const uint8_t *frame, uint16_t len);
+void nb_get_warm(uint8_t bms_id, uint8_t rec, nb_cache_t *out);
 
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);

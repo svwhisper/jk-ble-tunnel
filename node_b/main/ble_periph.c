@@ -168,6 +168,20 @@ static int chr2_access(uint16_t conn, uint16_t attr,
     if (len > sizeof(buf)) len = sizeof(buf);
     ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL);
     tunnel_cli_send_write((uint8_t)id, 1, false, buf, len);
+
+    /* Warm-start replay (2026-08-30): the app's opener is a command frame
+     * AA 55 90 EB <op> ... on FFE2 — 0x97 asks for device-info, 0x96 for cell
+     * info, each expecting a NOTIFY back. If the real module is asleep, A
+     * can't answer in time and the app fails with "request device information
+     * failure". Answer instantly from B's warm cache so the app stays
+     * connected; the live stream takes over once A wakes the module. */
+    if (len >= 5 && buf[0]==0xAA && buf[1]==0x55 && buf[2]==0x90 && buf[3]==0xEB) {
+        uint8_t rec = buf[4]==0x97 ? 0x03 : buf[4]==0x96 ? 0x02 : 0x00;
+        if (rec) {
+            nb_cache_t w; nb_get_warm((uint8_t)id, rec, &w);
+            if (w.len) ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
+        }
+    }
     return 0;
 }
 
