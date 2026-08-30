@@ -194,34 +194,11 @@ bool nb_get_name(uint8_t id, char *out, size_t out_len)
     return have;
 }
 
-/* Plain volatile per-id state: written only by the single tunnel task,
- * read by the same task's tick — no locking needed. */
-static volatile int64_t s_last_raw_us[CFG_NUM_UNITS];
-static volatile int32_t s_raw_rem[CFG_NUM_UNITS];   /* bytes left of frame */
-
-void nb_note_raw_chunk(uint8_t id, const uint8_t *d, uint16_t n)
+tunnel_link_state_t nb_link_state(uint8_t id)
 {
-    if (id >= CFG_NUM_UNITS) return;
-    s_last_raw_us[id] = esp_timer_get_time();
-    int32_t rem = s_raw_rem[id];
-    if (rem <= 0) {
-        /* At a boundary: a 55AAEB90 chunk starts a 300 B record; anything
-         * else (AT heartbeat, AA5590EBC8 ack) is an atomic chunk. */
-        rem = (n >= 4 && d[0]==0x55 && d[1]==0xAA && d[2]==0xEB && d[3]==0x90)
-              ? 300 - (int32_t)n : 0;
-    } else {
-        rem -= n;
-    }
-    s_raw_rem[id] = rem > 0 ? rem : 0;
-}
-
-bool nb_at_frame_boundary(uint8_t id)
-{
-    if (id >= CFG_NUM_UNITS) return true;
-    /* A stalled mid-frame stream counts as a boundary after 500 ms of
-     * silence (desync/death guard — the frame will never complete). */
-    if (esp_timer_get_time() - s_last_raw_us[id] > 500000) return true;
-    return s_raw_rem[id] <= 0;
+    if (id >= CFG_NUM_UNITS) return LINK_UNREACHABLE;
+    lock(); tunnel_link_state_t s = s_id[id].link; unlock();
+    return s;
 }
 
 void nb_set_conn(uint8_t id, bool c, uint16_t h)

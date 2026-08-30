@@ -118,15 +118,13 @@ bool nb_replay_ready(uint8_t bms_id);     /* ...&& pending_replay != 0   */
 int  nb_conn_handle(uint8_t bms_id);      /* handle, or -1 if not connected */
 bool nb_get_name(uint8_t bms_id, char *out, size_t out_len); /* false if unset */
 
-/* Live-pipe frame tracker: replays must NEVER interleave with live TUN_RAW
- * chunks mid-frame (the app reassembles one contiguous stream; interleaving
- * corrupted its devinfo — "device is not supported", 2026-08-30). B knows
- * the JK framing (300 B records; AT/ack chunks are atomic), so the safe
- * injection point is the next FRAME BOUNDARY — reached within ~100 ms even
- * on a busy stream, and immediately once a stream dies (500 ms silence also
- * counts, covering desync). */
-void nb_note_raw_chunk(uint8_t bms_id, const uint8_t *d, uint16_t n);
-bool nb_at_frame_boundary(uint8_t bms_id);
+/* Narrow link-state read for the replay gate: replays fire ONLY while the
+ * real link is down — a live link answers openers in-stream, and a replay
+ * coexisting with live traffic risks corrupting the app's contiguous-stream
+ * reassembly ("device is not supported"). Frame-boundary tracking was tried
+ * and REVERTED 2026-08-30: TUN_RAW chunks are not frame-aligned (AT
+ * heartbeats concatenate with frame starts), so it desyncs both ways. */
+tunnel_link_state_t nb_link_state(uint8_t bms_id);
 
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);

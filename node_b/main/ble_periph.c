@@ -233,11 +233,14 @@ void ble_periph_replay_tick(void)
     };
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         if (!nb_replay_ready(id)) continue;
-        /* Inject only at a JK frame boundary: this task also forwards the
-         * live raw stream, so delivery here can never split a live frame —
-         * and a boundary comes within ~100 ms even on a busy stream (or
-         * instantly once a stream dies). */
-        if (!nb_at_frame_boundary(id)) continue;
+        /* Replay ONLY while the real link is down: a live link answers
+         * openers in-stream (always the fast path), and replay coexisting
+         * with live traffic corrupts the app's reassembly. When the module
+         * dies mid-opener, A's TUN_LINK(down) arrives on the same ordered
+         * stream AFTER the final raw chunk — the pipe is clean by the time
+         * this fires. (Frame-boundary tracking tried + reverted: TUN_RAW
+         * chunks are not frame-aligned.) */
+        if (nb_link_state(id) == LINK_UP) continue;
         uint8_t bits = nb_take_replay(id);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
