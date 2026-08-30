@@ -77,7 +77,8 @@ void nb_set_warm(uint8_t id, uint8_t rec, const uint8_t *frame, uint16_t len)
     bool persist = false;
     lock();
     nb_cache_t *w = rec == 0x03 ? &s_id[id].warm_devinfo
-                  : rec == 0x02 ? &s_id[id].warm_cellinfo : NULL;
+                  : rec == 0x02 ? &s_id[id].warm_cellinfo
+                  : rec == 0x01 ? &s_id[id].warm_settings : NULL;
     if (w) {
         if (rec == 0x03) {
             /* Persist only on identity change. Devinfo carries live fields —
@@ -88,7 +89,7 @@ void nb_set_warm(uint8_t id, uint8_t rec, const uint8_t *frame, uint16_t len)
              * what write-once means here. */
             persist = !(w->len == len && len >= 38 &&
                         memcmp(w->data + 6, frame + 6, 32) == 0);
-        } else {
+        } else if (rec == 0x02) {
             s_id[id].warm_cell_us = esp_timer_get_time();
         }
         w->len = len; memcpy(w->data, frame, len);
@@ -106,7 +107,8 @@ void nb_get_warm(uint8_t id, uint8_t rec, nb_cache_t *out)
     if (id >= CFG_NUM_UNITS) return;
     lock();
     nb_cache_t *w = rec == 0x03 ? &s_id[id].warm_devinfo
-                  : rec == 0x02 ? &s_id[id].warm_cellinfo : NULL;
+                  : rec == 0x02 ? &s_id[id].warm_cellinfo
+                  : rec == 0x01 ? &s_id[id].warm_settings : NULL;
     if (w) *out = *w;
     /* Age gate: never replay old voltages as if live (see NB_CELL_REPLAY_
      * MAX_AGE_US). Applies here so every replay path inherits it. */
@@ -140,6 +142,25 @@ bool nb_replay_ready(uint8_t id)
              s_id[id].pending_replay != 0;
     unlock();
     return r;
+}
+
+int nb_conn_handle(uint8_t id)
+{
+    if (id >= CFG_NUM_UNITS) return -1;
+    lock();
+    int h = s_id[id].connected ? (int)s_id[id].conn_handle : -1;
+    unlock();
+    return h;
+}
+
+bool nb_get_name(uint8_t id, char *out, size_t out_len)
+{
+    if (id >= CFG_NUM_UNITS || !out_len) return false;
+    lock();
+    bool have = s_id[id].have_name;
+    if (have) strlcpy(out, s_id[id].name, out_len);
+    unlock();
+    return have;
 }
 
 void nb_set_conn(uint8_t id, bool c, uint16_t h)

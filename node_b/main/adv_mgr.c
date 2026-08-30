@@ -133,6 +133,31 @@ void adv_mgr_on_connect(uint8_t id)
 void adv_mgr_on_disconnect(uint8_t id)
 { if (id < CFG_NUM_UNITS) { s_set[id].connected = false; apply(id); } }
 
+/* Controller stopped instance `id` (ADV_COMPLETE). Record the truth; restart
+ * per policy unless the stop was for an incoming connection (the connect
+ * adoption path re-applies then). */
+void adv_mgr_on_adv_stopped(uint8_t id, bool restart)
+{
+    if (id >= CFG_NUM_UNITS) return;
+    s_set[id].advertising = false;
+    if (restart) apply(id);
+}
+
+/* Supervisor audit: reconcile our advertising flags with the controller.
+ * A set stranded "advertising" while actually stopped (mishandled connect,
+ * lost event) stayed dark until a reboot — TUN 1 and TUN 2, 2026-08-30. */
+void adv_mgr_audit(void)
+{
+    for (uint8_t i = 0; i < CFG_NUM_UNITS; i++) {
+        if (s_set[i].configured && s_set[i].advertising &&
+            !ble_gap_ext_adv_active(i)) {
+            ESP_LOGW(TAG, "audit: set[%u] stranded — reconciling", i);
+            s_set[i].advertising = false;
+        }
+        apply(i);   /* restart anything that should be on air and is not */
+    }
+}
+
 void adv_mgr_pause_all(void)
 {
     for (int i = 0; i < CFG_NUM_UNITS; i++)

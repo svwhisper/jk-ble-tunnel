@@ -1,6 +1,8 @@
 #include "supervisor.h"
 #include "config.h"
 #include "nb_state.h"
+#include "ble_periph.h"
+#include "adv_mgr.h"
 #include "tunnel_cli.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -15,6 +17,8 @@ static void supervisor_task(void *arg)
     esp_task_wdt_add(NULL);
     for (;;) {
         esp_task_wdt_reset();
+        ble_periph_audit_conns();   /* reap connections the controller lost */
+        adv_mgr_audit();            /* revive adv sets stranded off the air */
         size_t heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
         ESP_LOGI(TAG, "heap=%u conns=%d tunnel=%d",
                  (unsigned)heap, nb_active_conn_count(), tunnel_cli_up());

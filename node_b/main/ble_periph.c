@@ -176,21 +176,31 @@ static int chr2_access(uint16_t conn, uint16_t attr,
      * failure". Answer instantly from B's warm cache so the app stays
      * connected; the live stream takes over once A wakes the module. */
     if (len >= 5 && buf[0]==0xAA && buf[1]==0x55 && buf[2]==0x90 && buf[3]==0xEB) {
-        uint8_t rec = buf[4]==0x97 ? 0x03 : buf[4]==0x96 ? 0x02 : 0x00;
-        if (rec) {
+        /* 0x97 -> device-info; 0x96 -> settings THEN cell-info (the module
+         * streams both after a 96, and the app appears to need the settings
+         * frame before it paints the cell screen). */
+        static const uint8_t recs97[] = { 0x03, 0 };
+        static const uint8_t recs96[] = { 0x01, 0x02, 0 };
+        const uint8_t *recs = buf[4]==0x97 ? recs97
+                            : buf[4]==0x96 ? recs96 : NULL;
+        bool ready = recs && nb_notify_ready((uint8_t)id);
+        for (int i = 0; recs && recs[i]; i++) {
             /* Flags only — nb_identity_t is ~3.3 KB and this callback runs
              * on the nimble_host stack (whole-struct copy = the 2026-08-30
              * stack-protection panic). */
-            nb_cache_t w; nb_get_warm((uint8_t)id, rec, &w);
-            if (w.len && nb_notify_ready((uint8_t)id)) {
+            nb_cache_t w; nb_get_warm((uint8_t)id, recs[i], &w);
+            if (!w.len) continue;
+            if (ready) {
                 ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
-            } else if (w.len) {
+            } else {
                 /* The app writes its opener BEFORE subscribing (measured with
                  * app_probe 2026-08-30), so an instant replay here would be
                  * dropped by the CCCD gate. Owe it; the tunnel task's
                  * replay tick delivers once notifications come up. */
-                nb_mark_replay((uint8_t)id, rec == 0x03 ? NB_REPLAY_DEVINFO
-                                                        : NB_REPLAY_CELLINFO);
+                nb_mark_replay((uint8_t)id,
+                               recs[i] == 0x03 ? NB_REPLAY_DEVINFO
+                             : recs[i] == 0x01 ? NB_REPLAY_SETTINGS
+                                               : NB_REPLAY_CELLINFO);
             }
         }
     }
@@ -206,15 +216,38 @@ void ble_periph_replay_tick(void)
      * its own frames small (see serve()) — don't stack a 322 B cache under
      * the notify chain. */
     static nb_cache_t w;
+    /* Delivery order: devinfo, settings, cell-info — the app's own ladder. */
+    static const struct { uint8_t bit, rec; } seq[] = {
+        { NB_REPLAY_DEVINFO,  0x03 },
+        { NB_REPLAY_SETTINGS, 0x01 },
+        { NB_REPLAY_CELLINFO, 0x02 },
+    };
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         if (!nb_replay_ready(id)) continue;
         uint8_t bits = nb_take_replay(id);
-        for (int r = 0; r < 2; r++) {
-            uint8_t bit = r == 0 ? NB_REPLAY_DEVINFO : NB_REPLAY_CELLINFO;
-            if (!(bits & bit)) continue;
-            nb_get_warm(id, r == 0 ? 0x03 : 0x02, &w);
+        for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
+            if (!(bits & seq[r].bit)) continue;
+            nb_get_warm(id, seq[r].rec, &w);
             if (w.len) ble_periph_forward_notify(id, 0, w.data, w.len);
         }
+    }
+}
+
+/* Controller-truth audit (supervisor, every 10 s): an app connection can die
+ * without a DISCONNECT event reaching us (observed 2026-08-30: a hard-reset
+ * central left identity 1 "connected" forever, its adv set stopped — TUN 1
+ * vanished from the air until a B reboot). Any identity whose handle the
+ * controller no longer knows gets the full disconnect cleanup. */
+void ble_periph_audit_conns(void)
+{
+    for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
+        int h = nb_conn_handle(id);
+        if (h < 0) continue;
+        if (ble_gap_conn_find((uint16_t)h, NULL) == 0) continue;   /* alive */
+        ESP_LOGW(TAG, "audit: identity %u conn %d is gone — cleaning up", id, h);
+        nb_set_conn(id, false, 0);
+        adv_mgr_on_disconnect(id);
+        tunnel_cli_send_client(id, false);
     }
 }
 
@@ -298,31 +331,66 @@ void ble_periph_drop_all(void)
 }
 
 /* ---- GAP events --------------------------------------------------------- */
+/* Adopt a new app connection for identity `id`. Reached from CONNECT and,
+ * as a belt, from ADV_COMPLETE(reason=connection) — a connection was
+ * observed arriving with NO CONNECT event delivered here (2026-08-30: ATT
+ * served, nothing logged, the adv set stranded dark until reboot). */
+static void adopt_conn(uint8_t id, uint16_t h, const char *via)
+{
+    if (nb_identity_for_conn(h) >= 0) return;         /* already adopted */
+    /* One app connection at a time: accept-then-terminate a second
+     * (BLE has no reject primitive) — spec §5. */
+    if (nb_active_conn_count() >= CFG_MAX_APP_CONNS) {
+        ESP_LOGW(TAG, "2nd connection on id %u — terminating", id);
+        ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
+        return;
+    }
+    nb_set_conn(id, true, h);
+    adv_mgr_on_connect(id);
+    /* GAP device name = this identity (the real module's 2a00 returns the
+     * unit's own name; apps cross-check it against the advertised name).
+     * Safe as a global because only one app connection is allowed. Narrow
+     * accessor — a whole nb_identity_t here is ~3.3 KB of nimble_host
+     * stack (the 2026-08-30 overflow class). */
+    char name[32];
+    if (nb_get_name(id, name, sizeof(name)))
+        ble_svc_gap_device_name_set(name);
+    tunnel_cli_send_client(id, true);           /* drives A's connect-on-demand */
+    ESP_LOGI(TAG, "app connected -> identity %u (%s)", id, via);
+}
+
 static int gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT: {
-        if (event->connect.status != 0) return 0;
+        if (event->connect.status != 0) {
+            ESP_LOGW(TAG, "connect event status=%d", event->connect.status);
+            return 0;
+        }
         uint16_t h = event->connect.conn_handle;
         int id = identity_for_conn(h);
-        if (id < 0) { ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM); return 0; }
-
-        /* One app connection at a time: accept-then-terminate a second
-         * (BLE has no reject primitive) — spec §5. */
-        if (nb_active_conn_count() >= CFG_MAX_APP_CONNS) {
-            ESP_LOGW(TAG, "2nd connection on id %u — terminating", id);
+        if (id < 0) {   /* LOUD — this used to be a silent terminate */
+            ESP_LOGW(TAG, "connect %u: no identity — terminating", h);
             ble_gap_terminate(h, BLE_ERR_REM_USER_CONN_TERM);
             return 0;
         }
-        nb_set_conn(id, true, h);
-        adv_mgr_on_connect(id);
-        /* GAP device name = this identity (the real module's 2a00 returns the
-         * unit's own name; apps cross-check it against the advertised name).
-         * Safe as a global because only one app connection is allowed. */
-        { nb_identity_t it; nb_get_identity(id, &it);
-          if (it.have_name) ble_svc_gap_device_name_set(it.name); }
-        tunnel_cli_send_client(id, true);       /* drives A's connect-on-demand */
-        ESP_LOGI(TAG, "app connected -> identity %u", id);
+        adopt_conn((uint8_t)id, h, "connect");
+        return 0;
+    }
+    case BLE_GAP_EVENT_ADV_COMPLETE: {
+        /* The controller stopped this instance (a connection arrived, or the
+         * procedure ended). Ignoring this event let a set think it was still
+         * advertising after a mishandled connect — dark TUN until reboot. */
+        uint8_t inst = event->adv_complete.instance;
+        int reason   = event->adv_complete.reason;
+        adv_mgr_on_adv_stopped(inst, /*restart=*/reason != 0);
+        if (reason == 0 && inst < CFG_NUM_UNITS) {
+            /* Stopped by an incoming connection: adopt it here too, in case
+             * the CONNECT event never arrives. instance == identity. */
+            uint16_t h = event->adv_complete.conn_handle;
+            if (ble_gap_conn_find(h, NULL) == 0)
+                adopt_conn(inst, h, "adv_complete");
+        }
         return 0;
     }
     case BLE_GAP_EVENT_DISCONNECT: {

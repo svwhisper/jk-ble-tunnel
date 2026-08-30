@@ -18,6 +18,8 @@ void adv_mgr_set_name(uint8_t bms_id, const char *name);
 void adv_mgr_on_link(uint8_t bms_id, tunnel_link_state_t state);
 void adv_mgr_on_connect(uint8_t bms_id);
 void adv_mgr_on_disconnect(uint8_t bms_id);
+void adv_mgr_on_adv_stopped(uint8_t bms_id, bool restart); /* ADV_COMPLETE truth */
+void adv_mgr_audit(void);                /* reconcile flags with the controller  */
 void adv_mgr_pause_all(void);            /* tunnel-down / grace expiry (spec §11) */
 
 const uint8_t *adv_mgr_addr(uint8_t bms_id);      /* 6-byte static-random addr */

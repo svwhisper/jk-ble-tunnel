@@ -19,6 +19,7 @@ void ble_periph_forward_notify(uint8_t bms_id, uint8_t idx,
                                const uint8_t *data, uint16_t len);
 void ble_periph_on_write_result(uint8_t bms_id, uint8_t idx, uint8_t status);
 void ble_periph_replay_tick(void);       /* deliver owed warm replays (~10 Hz) */
+void ble_periph_audit_conns(void);       /* reap conns the controller lost     */
 void ble_periph_drop_all(void);          /* terminate all app connections */
 
 #endif /* BLE_PERIPH_H */

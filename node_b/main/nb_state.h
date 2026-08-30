@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "tunnel_proto.h"
 #include "jk_ble_defs.h"
 
@@ -23,6 +24,7 @@
 /* pending_replay bitmask */
 #define NB_REPLAY_DEVINFO  0x01
 #define NB_REPLAY_CELLINFO 0x02
+#define NB_REPLAY_SETTINGS 0x04
 
 typedef struct {
     uint16_t len;
@@ -54,6 +56,9 @@ typedef struct {
      * failure") waiting for A to wake and scan-find a sleeping module. */
     nb_cache_t warm_devinfo;   /* last 0x03 frame (NVS-persisted — static)  */
     nb_cache_t warm_cellinfo;  /* last 0x02 frame (RAM only, age-gated)     */
+    nb_cache_t warm_settings;  /* last 0x01 frame (RAM only, no gate: the
+                                * only writer is the owner via MQTT, and the
+                                * write's own readback refreshes the cache) */
     int64_t    warm_cell_us;   /* when warm_cellinfo was captured           */
 
     /* Replay owed to the app but blocked by a disabled CCCD at write time
@@ -99,6 +104,8 @@ uint8_t nb_take_replay(uint8_t bms_id);   /* returns and clears the bits */
  * (2026-08-30 panic). Use these where only the flags are needed. */
 bool nb_notify_ready(uint8_t bms_id);     /* connected && notify_enabled */
 bool nb_replay_ready(uint8_t bms_id);     /* ...&& pending_replay != 0   */
+int  nb_conn_handle(uint8_t bms_id);      /* handle, or -1 if not connected */
+bool nb_get_name(uint8_t bms_id, char *out, size_t out_len); /* false if unset */
 
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);

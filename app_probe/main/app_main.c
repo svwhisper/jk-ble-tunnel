@@ -103,17 +103,28 @@ static int gap_ev(struct ble_gap_event *ev, void *arg)
 {
     switch (ev->type) {
     case BLE_GAP_EVENT_DISC: {
-        if (s_found || s_target < 0) return 0;
+        if (s_target == -1) return 0;
         struct ble_hs_adv_fields f;
         if (ble_hs_adv_parse_fields(&f, ev->disc.data, ev->disc.length_data))
             return 0;
         if (!f.name || f.name_len < 5) return 0;
+        const uint8_t *a = ev->disc.addr.val;
+        /* Survey mode ('s'): print every named advert, connect to nothing. */
+        if (s_target == -2) {
+            printf("ADV %02X:%02X:%02X:%02X:%02X:%02X t%d rssi=%d '%.*s'\n",
+                   a[5], a[4], a[3], a[2], a[1], a[0], ev->disc.addr.type,
+                   ev->disc.rssi, f.name_len, f.name);
+            return 0;
+        }
+        if (s_found) return 0;
         /* Clone names: TUN_0-00 / TUN 1-01 / ... — bank digit at offset 4. */
         if (memcmp(f.name, "TUN", 3) != 0 || f.name[4] != '0' + s_target)
             return 0;
         s_peer = ev->disc.addr; s_found = true;
-        printf("ADV +%lu matched '%.*s' rssi=%d\n", (unsigned long)ms_now(),
-               f.name_len, f.name, ev->disc.rssi);
+        printf("ADV +%lu matched '%.*s' %02X:%02X:%02X:%02X:%02X:%02X t%d rssi=%d\n",
+               (unsigned long)ms_now(), f.name_len, f.name,
+               a[5], a[4], a[3], a[2], a[1], a[0], ev->disc.addr.type,
+               ev->disc.rssi);
         ble_gap_disc_cancel();
         int rc = ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &s_peer, 5000, NULL,
                                  gap_ev, NULL);
@@ -225,9 +236,17 @@ static void run_session(int bank)
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 out:
-    if (s_conn != 0xFFFF)
-        ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
-    vTaskDelay(pdMS_TO_TICKS(300));
+    /* Terminate and CONFIRM: a fire-and-forget terminate once left the clone
+     * occupied forever — B stopped advertising TUN 1 until it was rebooted
+     * (2026-08-30). Retry once, then say so loudly. */
+    for (int t = 0; t < 2 && s_conn != 0xFFFF; t++) {
+        int rc = ble_gap_terminate(s_conn, BLE_ERR_REM_USER_CONN_TERM);
+        if (rc != 0 && rc != BLE_HS_EALREADY)
+            printf("TERMINATE rc=%d\n", rc);
+        uint32_t st = ms_now();
+        while (s_connected && ms_now() - st < 3000) vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (s_connected) printf("WARNING: connection did not close — clone occupied!\n");
     ble_gap_disc_cancel();                        /* in case scan still runs */
     printf("=== END bank %d: rx=%d devinfo=%s dur=%lums ===\n\n", bank,
            s_rx_count, s_devinfo_seen ? "YES" : "NO", (unsigned long)ms_now());
@@ -253,6 +272,18 @@ void app_main(void)
         if (c == 'o') {
             s_write_first = !s_write_first;
             printf("order = %s\n", s_write_first ? "WRITE-FIRST" : "SUBSCRIBE-FIRST");
+        } else if (c == 's') {
+            /* 10 s survey: every named advert with address, no connecting. */
+            if (s_target == -1) {
+                s_target = -2;
+                struct ble_gap_disc_params sp =
+                    { .passive = 0, .itvl = 0x50, .window = 0x30 };
+                printf("--- survey start ---\n");
+                ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 10000, &sp, gap_ev, NULL);
+                vTaskDelay(pdMS_TO_TICKS(10500));
+                s_target = -1;
+                printf("--- survey end ---\n");
+            }
         } else if (c == 'q') {
             s_abort = true;
         } else if (c >= '0' && c <= '3') {
