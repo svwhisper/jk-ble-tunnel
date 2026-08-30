@@ -21,13 +21,16 @@ static inline void unlock(void) { xSemaphoreGive(s_mtx); }
 static void devinfo_key(uint8_t id, int page, char *k)
 { sprintf(k, "w%c%u", page ? 'b' : 'a', id); }
 
-/* Devinfo page classifier: page A carries hw/sw version strings at bytes
- * 22..29; page B zeros them (passcode + mfg date live further in). */
-static int devinfo_page(const uint8_t *f, uint16_t len)
+/* Devinfo richness score. The unit emits two valid devinfo variants: a RICH
+ * request-response (setup passcode, mfg date, serial, PIN populated — what
+ * the app validates its password against) and a SPARSE stream filler with
+ * those fields zeroed. Replaying a sparse one = "request device information
+ * failure" no matter how fast it arrives (2026-08-30). Cache the richest. */
+static int devinfo_score(const uint8_t *f, uint16_t len)
 {
-    if (len < 30) return 0;
-    for (int i = 22; i < 30; i++) if (f[i]) return 0;
-    return 1;
+    int n = 0;
+    for (int i = 38; i < 160 && i < len; i++) if (f[i]) n++;
+    return n;
 }
 
 void nb_state_init(void)
@@ -91,13 +94,14 @@ void nb_set_warm(uint8_t id, uint8_t rec, const uint8_t *frame, uint16_t len)
     lock();
     nb_cache_t *w;
     if (rec == 0x03) {
-        page = devinfo_page(frame, len);
-        w = &s_id[id].warm_dev[page];
-        /* Persist only on identity change. Devinfo carries live fields —
-         * frame counter (byte 5), module uptime, checksum — that differ
-         * every frame; the stable identity is bytes 6..37 (model + the
-         * page's fixed region). That is what write-once means here. */
-        persist = !(w->len == len && len >= 38 &&
+        w = &s_id[id].warm_dev[0];          /* single slot: the richest frame */
+        int news = devinfo_score(frame, len);
+        int olds = devinfo_score(w->data, w->len);
+        if (w->len && news < olds) { unlock(); return; }  /* never downgrade */
+        /* Persist on a richness upgrade or identity change (compare skips
+         * the counter byte 5 and volatile uptime; NVS wear guard). */
+        persist = (news > olds) ||
+                  !(w->len == len && len >= 38 &&
                     memcmp(w->data + 6, frame + 6, 32) == 0);
     } else {
         w = rec == 0x02 ? &s_id[id].warm_cellinfo
