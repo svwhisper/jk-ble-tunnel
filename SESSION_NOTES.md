@@ -2,7 +2,51 @@
 
 Living design/status doc. Keep current alongside code changes.
 
-## READ FIRST — 2026-08-30: BALANCE WRITES LIVE (O-2/O-5 resolved)
+## READ FIRST — 2026-08-30 PM: APP-CONNECT RELIABILITY FIXED (2 root causes)
+
+The "flaky initial app connect" resolved into two separate bugs, both
+found by measurement (not tuning) and both fixed + verified:
+
+1. **Node A multi-connect race** (`ble_owner.c scan_event`): DISC events
+   arrive in bursts; `s_connecting` stayed set until the CONNECT event, so a
+   duplicate DISC failed `ble_gap_connect` (busy) and FREED the in-flight
+   link. The orphan completed into a freed slot; each arbiter retry stacked
+   another connection. Bank 0 (Telink — advertises even while connected)
+   held **4 phantom connections** within 3 s of boot (conn:7/disc:2, 2 real
+   links) and went silent; on the trio the same race = the historical
+   "UNREACHABLE-while-advertising" ghosts. Fix: resolve scan phase before
+   connecting, separate `s_conn_inflight`, adopt only the expected
+   completion (terminate orphans). Verified: clean boots, exact accounting.
+2. **Node B warm replay dropped by the CCCD gate**: the app writes its 0x97
+   opener BEFORE subscribing (measured with `app_probe/`), so the instant
+   replay was discarded → sleeping banks timed out ("request device
+   information failure"). Fix: replay owed while CCCD is off is marked
+   pending and delivered by `ble_periph_replay_tick()` from the tunnel
+   task's 100 ms loop. `warm_devinfo` is NVS-persisted (write-once; the
+   compare skips the rolling counter byte 5 + trailing checksum); cell
+   replay age-gated 10 min (never show old volts as live).
+
+**Verified (sleeping bank 1, app-like order):** devinfo replay 197 ms after
+subscribe, cell replay 1.9 s, live stream 2.6 s, full session, no crash.
+
+**Lessons paid for in blood today:**
+- `nb_identity_t` is ~3.3 KB (ten embedded caches). Copying it in a NimBLE
+  callback = stack protection fault on `nimble_host` (B crashed twice).
+  Use `nb_notify_ready()`/`nb_replay_ready()`; keep big buffers static.
+- B's resync must send TUN_CLIENT **false** too: a B crash mid-app-session
+  left A re-raising a bank for a phantom app.
+- `app_probe/` (retired C3 over USB) = fake-app endpoint tester: keys 0-3
+  run a session, 'o' toggles write-first/subscribe-first, hex-logs every
+  notify with ms stamps. Never sends 0x6C (junk RTC).
+
+**STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
+answers link-up polls (last_seen = link-up moment) then goes deaf: later
+0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE
+link stays up throughout. Separate investigation needed (rawcap on bank 0;
+suspect the Telink UART bridge dozes independently of its radio). App
+sessions to TUN-0 will at least get devinfo once NVS has cached it.
+
+## PRIOR READ FIRST — 2026-08-30: BALANCE WRITES LIVE (O-2/O-5 resolved)
 
 Settings writes are ENABLED and live-verified end-to-end over MQTT on a
 sealed garage bank, no app involved. `JK_ENABLE_WRITES=1`.
