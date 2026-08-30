@@ -2,6 +2,11 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## ⚠️ OPERATIONAL: iBMS CHARGE CONTROL RE-ENABLED (2026-08-30 evening)
+The experiment-era "Victron ignores the iBMS" condition is OVER. Disable
+iBMS charge control BEFORE any alarm-capable work (cell_count recal, bounce,
+unit power-cycles) — a transient BMS error now drops Victron power.
+
 ## 2026-08-30 NIGHTCAP: BANK 0 ALIVE + FFE1 IS THE UNIVERSAL WRITE CHANNEL
 Owner power-cycled unit 0 ("BMS 0 was wedged") — it has streamed
 continuously since (>10 min vs the historic ~100 s stall): the deaf-inbound
