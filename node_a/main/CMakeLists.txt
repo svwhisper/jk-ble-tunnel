@@ -11,6 +11,7 @@ idf_component_register(
         "mqtt_task.c"
         "measure.c"
         "supervisor.c"
+        "log_udp.c"
         "display.c"
     INCLUDE_DIRS "."
     REQUIRES

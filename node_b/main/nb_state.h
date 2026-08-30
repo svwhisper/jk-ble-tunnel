@@ -54,7 +54,12 @@ typedef struct {
      * app's opener (0x97/0x96) instantly from cache when the real link is
      * asleep — otherwise the app times out ("request device information
      * failure") waiting for A to wake and scan-find a sleeping module. */
-    nb_cache_t warm_devinfo;   /* last 0x03 frame (NVS-persisted — static)  */
+    /* Device-info is TWO alternating pages (2026-08-30 discovery): page A
+     * carries model + hw/sw version + serial; page B zeros the version
+     * bytes and carries passcode + mfg date. The app needs page A (a
+     * page-B-only replay parses as an unversioned device — "device is not
+     * supported"). Cache both; replay A then B like the module. */
+    nb_cache_t warm_dev[2];    /* [0]=page A, [1]=page B (NVS-persisted)    */
     nb_cache_t warm_cellinfo;  /* last 0x02 frame (RAM only, age-gated)     */
     nb_cache_t warm_settings;  /* last 0x01 frame (RAM only, no gate: the
                                 * only writer is the owner via MQTT, and the
@@ -98,6 +103,8 @@ void nb_get_cache(uint8_t bms_id, uint8_t idx, nb_cache_t *out);
  * len=0 — the age gate applies to every replay path. */
 void nb_set_warm(uint8_t bms_id, uint8_t rec, const uint8_t *frame, uint16_t len);
 void nb_get_warm(uint8_t bms_id, uint8_t rec, nb_cache_t *out);
+/* Devinfo pages (rec 0x03 is cached per page): page 0 = A, 1 = B. */
+void nb_get_warm_dev(uint8_t bms_id, int page, nb_cache_t *out);
 
 /* Deferred replay owed to a connected app whose CCCD was off at write time. */
 void    nb_mark_replay(uint8_t bms_id, uint8_t bits);

@@ -18,7 +18,17 @@ static nvs_handle_t    s_nvs;      /* "warm" namespace — devinfo blobs */
 static inline void lock(void)   { xSemaphoreTake(s_mtx, portMAX_DELAY); }
 static inline void unlock(void) { xSemaphoreGive(s_mtx); }
 
-static void devinfo_key(uint8_t id, char *k) { sprintf(k, "wd%u", id); }
+static void devinfo_key(uint8_t id, int page, char *k)
+{ sprintf(k, "w%c%u", page ? 'b' : 'a', id); }
+
+/* Devinfo page classifier: page A carries hw/sw version strings at bytes
+ * 22..29; page B zeros them (passcode + mfg date live further in). */
+static int devinfo_page(const uint8_t *f, uint16_t len)
+{
+    if (len < 30) return 0;
+    for (int i = 22; i < 30; i++) if (f[i]) return 0;
+    return 1;
+}
 
 void nb_state_init(void)
 {
@@ -32,11 +42,14 @@ void nb_state_init(void)
      * failure" even before a bank has streamed this uptime (2026-08-30). */
     if (nvs_open("warm", NVS_READWRITE, &s_nvs) == ESP_OK) {
         for (uint8_t i = 0; i < CFG_NUM_UNITS; i++) {
-            char k[8]; devinfo_key(i, k);
-            size_t len = NB_CACHE_MAX;
-            if (nvs_get_blob(s_nvs, k, s_id[i].warm_devinfo.data, &len) == ESP_OK) {
-                s_id[i].warm_devinfo.len = (uint16_t)len;
-                ESP_LOGI(TAG, "devinfo[%u] restored (%u B)", i, (unsigned)len);
+            for (int p = 0; p < 2; p++) {
+                char k[8]; devinfo_key(i, p, k);
+                size_t len = NB_CACHE_MAX;
+                if (nvs_get_blob(s_nvs, k, s_id[i].warm_dev[p].data, &len) == ESP_OK) {
+                    s_id[i].warm_dev[p].len = (uint16_t)len;
+                    ESP_LOGI(TAG, "devinfo[%u] page %c restored (%u B)", i,
+                             p ? 'B' : 'A', (unsigned)len);
+                }
             }
         }
     } else {
@@ -74,31 +87,30 @@ void nb_set_warm(uint8_t id, uint8_t rec, const uint8_t *frame, uint16_t len)
 {
     if (id >= CFG_NUM_UNITS) return;
     if (len > NB_CACHE_MAX) len = NB_CACHE_MAX;
-    bool persist = false;
+    bool persist = false; int page = 0;
     lock();
-    nb_cache_t *w = rec == 0x03 ? &s_id[id].warm_devinfo
-                  : rec == 0x02 ? &s_id[id].warm_cellinfo
-                  : rec == 0x01 ? &s_id[id].warm_settings : NULL;
-    if (w) {
-        if (rec == 0x03) {
-            /* Persist only on identity change. Devinfo carries live fields —
-             * frame counter (byte 5), module uptime (u32 @38), checksum —
-             * that differ every frame, so comparing the whole payload
-             * rewrote NVS on each devinfo (observed 2026-08-30). The stable
-             * identity is the model/hw/fw strings at bytes 6..37; that is
-             * what write-once means here. */
-            persist = !(w->len == len && len >= 38 &&
-                        memcmp(w->data + 6, frame + 6, 32) == 0);
-        } else if (rec == 0x02) {
-            s_id[id].warm_cell_us = esp_timer_get_time();
-        }
-        w->len = len; memcpy(w->data, frame, len);
+    nb_cache_t *w;
+    if (rec == 0x03) {
+        page = devinfo_page(frame, len);
+        w = &s_id[id].warm_dev[page];
+        /* Persist only on identity change. Devinfo carries live fields —
+         * frame counter (byte 5), module uptime, checksum — that differ
+         * every frame; the stable identity is bytes 6..37 (model + the
+         * page's fixed region). That is what write-once means here. */
+        persist = !(w->len == len && len >= 38 &&
+                    memcmp(w->data + 6, frame + 6, 32) == 0);
+    } else {
+        w = rec == 0x02 ? &s_id[id].warm_cellinfo
+          : rec == 0x01 ? &s_id[id].warm_settings : NULL;
+        if (rec == 0x02) s_id[id].warm_cell_us = esp_timer_get_time();
     }
+    if (w) { w->len = len; memcpy(w->data, frame, len); }
     unlock();
     if (persist && s_nvs) {
-        char k[8]; devinfo_key(id, k);
+        char k[8]; devinfo_key(id, page, k);
         if (nvs_set_blob(s_nvs, k, frame, len) == ESP_OK) nvs_commit(s_nvs);
-        ESP_LOGI(TAG, "devinfo[%u] persisted (%u B)", id, len);
+        ESP_LOGI(TAG, "devinfo[%u] page %c persisted (%u B)", id,
+                 page ? 'B' : 'A', len);
     }
 }
 void nb_get_warm(uint8_t id, uint8_t rec, nb_cache_t *out)
@@ -106,7 +118,7 @@ void nb_get_warm(uint8_t id, uint8_t rec, nb_cache_t *out)
     out->len = 0;
     if (id >= CFG_NUM_UNITS) return;
     lock();
-    nb_cache_t *w = rec == 0x03 ? &s_id[id].warm_devinfo
+    nb_cache_t *w = rec == 0x03 ? &s_id[id].warm_dev[0]   /* page A */
                   : rec == 0x02 ? &s_id[id].warm_cellinfo
                   : rec == 0x01 ? &s_id[id].warm_settings : NULL;
     if (w) *out = *w;
@@ -116,6 +128,13 @@ void nb_get_warm(uint8_t id, uint8_t rec, nb_cache_t *out)
         esp_timer_get_time() - s_id[id].warm_cell_us > NB_CELL_REPLAY_MAX_AGE_US)
         out->len = 0;
     unlock();
+}
+
+void nb_get_warm_dev(uint8_t id, int page, nb_cache_t *out)
+{
+    out->len = 0;
+    if (id >= CFG_NUM_UNITS || page < 0 || page > 1) return;
+    lock(); *out = s_id[id].warm_dev[page]; unlock();
 }
 
 void nb_mark_replay(uint8_t id, uint8_t bits)

@@ -74,7 +74,17 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
     for (int i = 0; recs[i]; i++) {
         /* Flags only — nb_identity_t is ~3.3 KB and this runs on the
          * nimble_host stack (whole-struct copy = the 2026-08-30 panic). */
-        nb_cache_t w; nb_get_warm((uint8_t)id, recs[i], &w);
+        nb_cache_t w;
+        if (recs[i] == 0x03 && ready) {
+            /* Devinfo = BOTH pages, A then B, like the module sends them
+             * (a page-B-only replay = "device is not supported"). */
+            for (int p = 0; p < 2; p++) {
+                nb_get_warm_dev((uint8_t)id, p, &w);
+                if (w.len) ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
+            }
+            continue;
+        }
+        nb_get_warm((uint8_t)id, recs[i], &w);
         if (!w.len) continue;
         if (ready) {
             ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
@@ -253,6 +263,13 @@ void ble_periph_replay_tick(void)
         uint8_t bits = nb_take_replay(id);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
+            if (seq[r].rec == 0x03) {          /* both devinfo pages, A then B */
+                for (int p = 0; p < 2; p++) {
+                    nb_get_warm_dev(id, p, &w);
+                    if (w.len) ble_periph_forward_notify(id, 0, w.data, w.len);
+                }
+                continue;
+            }
             nb_get_warm(id, seq[r].rec, &w);
             if (w.len) ble_periph_forward_notify(id, 0, w.data, w.len);
         }

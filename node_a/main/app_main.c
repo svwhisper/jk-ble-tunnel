@@ -5,6 +5,7 @@
  *   caches are ready before any consumer can drive them.
  */
 #include "esp_log.h"
+#include "log_udp.h"
 #include "esp_task_wdt.h"
 #include "nvs_store.h"
 #include "queues.h"
@@ -36,6 +37,7 @@ void app_main(void)
     net_wifi_set_txpower(CFG_WIFI_MAX_TX_QDBM);          /* marginal-supply guard */
     net_wifi_wait(20000);
     net_sntp_start(CFG_NTP_SERVER);
+    log_udp_start();               /* mirror logs to UDP :3766 (no console here) */
 
     /* Push-OTA receiver: started HERE, before NimBLE + the task fleet, while
      * internal RAM is plentiful. Started at the tail it lost the resource
