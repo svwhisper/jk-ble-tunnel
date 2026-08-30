@@ -124,6 +124,22 @@ uint8_t nb_take_replay(uint8_t id)
     return b;
 }
 
+bool nb_notify_ready(uint8_t id)
+{
+    if (id >= CFG_NUM_UNITS) return false;
+    lock(); bool r = s_id[id].connected && s_id[id].notify_enabled; unlock();
+    return r;
+}
+bool nb_replay_ready(uint8_t id)
+{
+    if (id >= CFG_NUM_UNITS) return false;
+    lock();
+    bool r = s_id[id].connected && s_id[id].notify_enabled &&
+             s_id[id].pending_replay != 0;
+    unlock();
+    return r;
+}
+
 void nb_set_conn(uint8_t id, bool c, uint16_t h)
 {
     if (id >= CFG_NUM_UNITS) return;

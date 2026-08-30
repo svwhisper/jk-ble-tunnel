@@ -94,6 +94,12 @@ void nb_get_warm(uint8_t bms_id, uint8_t rec, nb_cache_t *out);
 void    nb_mark_replay(uint8_t bms_id, uint8_t bits);
 uint8_t nb_take_replay(uint8_t bms_id);   /* returns and clears the bits */
 
+/* Narrow flag reads. nb_identity_t is ~3.3 KB (ten embedded caches) — a
+ * whole-struct copy in a NimBLE callback blew the nimble_host stack
+ * (2026-08-30 panic). Use these where only the flags are needed. */
+bool nb_notify_ready(uint8_t bms_id);     /* connected && notify_enabled */
+bool nb_replay_ready(uint8_t bms_id);     /* ...&& pending_replay != 0   */
+
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);
 void nb_set_notify(uint8_t bms_id, bool enabled);

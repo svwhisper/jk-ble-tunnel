@@ -107,11 +107,12 @@ static void on_frame(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
 static void resync(void)
 {
     enqueue(TUN_TABLE_REQ, TUNNEL_BMS_ID_LINK, NULL, 0);
-    /* Replay CLIENT for any identity that currently holds an app connection,
-     * so A's arbitration state is reconstructed after a blip. */
+    /* Replay CLIENT state for EVERY identity — false included. Sending only
+     * the trues left A with a stale app_connected after a B crash mid-session
+     * (observed 2026-08-30: A kept re-raising bank 2 for a phantom app). */
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         nb_identity_t it; nb_get_identity(id, &it);
-        if (it.connected) tunnel_cli_send_client(id, true);
+        tunnel_cli_send_client(id, it.connected);
     }
 }
 

@@ -178,9 +178,11 @@ static int chr2_access(uint16_t conn, uint16_t attr,
     if (len >= 5 && buf[0]==0xAA && buf[1]==0x55 && buf[2]==0x90 && buf[3]==0xEB) {
         uint8_t rec = buf[4]==0x97 ? 0x03 : buf[4]==0x96 ? 0x02 : 0x00;
         if (rec) {
+            /* Flags only — nb_identity_t is ~3.3 KB and this callback runs
+             * on the nimble_host stack (whole-struct copy = the 2026-08-30
+             * stack-protection panic). */
             nb_cache_t w; nb_get_warm((uint8_t)id, rec, &w);
-            nb_identity_t it; nb_get_identity((uint8_t)id, &it);
-            if (w.len && it.notify_enabled) {
+            if (w.len && nb_notify_ready((uint8_t)id)) {
                 ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
             } else if (w.len) {
                 /* The app writes its opener BEFORE subscribing (measured with
@@ -200,14 +202,17 @@ static int chr2_access(uint16_t conn, uint16_t attr,
  * from the subscribe callback (that wedged the live stream, 2026-08-30). */
 void ble_periph_replay_tick(void)
 {
+    /* Static: only the single tunnel task calls this, and that task keeps
+     * its own frames small (see serve()) — don't stack a 322 B cache under
+     * the notify chain. */
+    static nb_cache_t w;
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
-        nb_identity_t it; nb_get_identity(id, &it);
-        if (!it.connected || !it.notify_enabled || !it.pending_replay) continue;
+        if (!nb_replay_ready(id)) continue;
         uint8_t bits = nb_take_replay(id);
         for (int r = 0; r < 2; r++) {
             uint8_t bit = r == 0 ? NB_REPLAY_DEVINFO : NB_REPLAY_CELLINFO;
             if (!(bits & bit)) continue;
-            nb_cache_t w; nb_get_warm(id, r == 0 ? 0x03 : 0x02, &w);
+            nb_get_warm(id, r == 0 ? 0x03 : 0x02, &w);
             if (w.len) ble_periph_forward_notify(id, 0, w.data, w.len);
         }
     }
