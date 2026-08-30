@@ -204,6 +204,7 @@ int jk_decode_settings(jk_frame_ver_t ver, const uint8_t *frame, uint16_t len,
     out->balance_trigger_v = rd_u32(&frame[26]) / 1000.0f;
     out->balance_current_a = rd_u32(&frame[78]) / 1000.0f;
     out->balancing_enabled = rd_u32(&frame[126]) != 0;
+    out->balance_start_v   = rd_u32(&frame[138]) / 1000.0f;
     return 0;
 }
 
@@ -262,6 +263,9 @@ static const jk_setting_reg_t JK_SETTING_REGS[] = {
     { "balance_trigger_voltage", 0x06, 1000.0 },  /* millivolts (a DELTA, not absolute) */
     { "balance_current",         0x13, 1000.0 },  /* milliamps                          */
     { "balancing_enabled",       0x1F,    1.0 },  /* 0/1                                 */
+    /* Register from esphome-jk-bms JK02_32S map (trigger/current/enable all
+     * cross-check against our live app captures, anchoring the table). */
+    { "balance_start_voltage",   0x22, 1000.0 },  /* millivolts, ABSOLUTE                */
 };
 #define JK_SETTING_REGS_N (sizeof(JK_SETTING_REGS)/sizeof(JK_SETTING_REGS[0]))
 

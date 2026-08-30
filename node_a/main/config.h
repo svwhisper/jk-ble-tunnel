@@ -112,6 +112,10 @@ static const cfg_range_t CFG_BALANCE_RANGE[] = {
     { "balance_trigger_voltage", 0.003, 0.100 },  /* volts, delta */
     { "balance_current",         0.10,  2.00  },  /* amps         */
     { "balancing_enabled",       0.0,   1.0   },  /* bool         */
+    { "balance_start_voltage",   2.90,  3.50  },  /* volts, ABSOLUTE — envelope
+                                                   * covers the recalibration
+                                                   * procedure (3.0) and the
+                                                   * normal setpoint (3.42) */
 };
 #define CFG_BALANCE_RANGE_N (sizeof(CFG_BALANCE_RANGE)/sizeof(CFG_BALANCE_RANGE[0]))
 

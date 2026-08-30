@@ -74,6 +74,7 @@ typedef struct {
 typedef struct {
     jk_frame_ver_t ver;
     float    balance_trigger_v;  /* balance_trigger_voltage (writable)         */
+    float    balance_start_v;    /* balance starting voltage, absolute (writable) */
     float    balance_current_a;  /* balance current limit                      */
     bool     balancing_enabled;
     uint8_t  raw[JK_SETTINGS_RAW_MAX]; /* retained verbatim for readback diff  */
