@@ -22,6 +22,9 @@ int64_t net_wifi_down_ms(void);
 int net_wifi_rssi(void);               /* dBm to the AP; 0 = not associated */
 void net_wifi_ip_str(char *buf, int n); /* "192.168.3.241" or "-" */
 void net_sntp_start(const char *server);
+/* Nightly maintenance reboot at hour:min local (POSIX TZ string, DST-aware).
+ * Skips while busy() is true and within the first 2 h of uptime. */
+void nightly_reboot_start(const char *tz, int hour, int min, bool (*busy)(void));
 
 /* Cap WiFi TX power (units of 0.25 dBm; e.g. 34 = 8.5 dBm). Call after
  * net_wifi_start. On a marginal USB supply, full TX power (~20 dBm) browns out

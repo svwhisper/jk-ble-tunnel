@@ -40,6 +40,9 @@ void app_main(void)
         { nvs_flash_erase(); nvs_flash_init(); }
 
     net_wifi_start(WIFI_SSID, WIFI_PASS, "jk-node-b");   /* DHCP hostname (spec §12) */
+    net_sntp_start(CFG_NTP_SERVER);
+    /* 01:05 — five minutes after Node A, so fresh-B resyncs against fresh-A. */
+    nightly_reboot_start(CFG_TZ, 1, 5, NULL);   /* unconditional */
     net_wifi_set_txpower(CFG_WIFI_MAX_TX_QDBM);          /* marginal-supply guard */
     net_wifi_wait(20000);
 

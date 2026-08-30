@@ -38,6 +38,7 @@ void app_main(void)
     net_wifi_wait(20000);
     net_sntp_start(CFG_NTP_SERVER);
     log_udp_start();               /* mirror logs to UDP :3766 (no console here) */
+    nightly_reboot_start(CFG_TZ, 1, 0, NULL);  /* 01:00, unconditional */               /* mirror logs to UDP :3766 (no console here) */
 
     /* Push-OTA receiver: started HERE, before NimBLE + the task fleet, while
      * internal RAM is plentiful. Started at the tail it lost the resource

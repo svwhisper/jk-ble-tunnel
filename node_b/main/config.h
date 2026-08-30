@@ -21,6 +21,10 @@
 #define CFG_MAX_APP_CONNS        1     /* accept-then-terminate a 2nd (spec §5)     */
 #define CFG_ROTATE_RANDOM_ADDR   0     /* rotate on boot if replica table changed   */
 
+/* Clock: SNTP + local TZ for the 01:05 nightly maintenance reboot. */
+#define CFG_NTP_SERVER   "pool.ntp.org"
+#define CFG_TZ           "AEST-10AEDT,M10.1.0,M4.1.0/3"
+
 /* Tunnel (spec §6). */
 #define CFG_TUNNEL_PING_MS       5000
 #define CFG_TUNNEL_DEAD_MS       15000

@@ -148,6 +148,9 @@ _Static_assert(CFG_MEAS_SETTLE_MS < CFG_MEAS_TIMEOUT_MS,
 #define CFG_MQTT_BASE            "jkbms"
 #define CFG_MQTT_BRIDGE_STATUS   CFG_MQTT_BASE "/bridge/status"
 #define CFG_NTP_SERVER           "pool.ntp.org"
+/* Australia/Victoria: AEST with AEDT daylight rules — keeps the nightly
+ * maintenance reboot at 01:00 true-local year-round. */
+#define CFG_TZ                   "AEST-10AEDT,M10.1.0,M4.1.0/3"
 
 /* BLE quiesce while WiFi re-associates (shared C3 radio): when WiFi has been
  * down longer than this, stop initiating BLE scans/connects so the 802.11
