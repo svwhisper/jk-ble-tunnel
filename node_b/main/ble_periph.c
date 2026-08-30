@@ -179,10 +179,38 @@ static int chr2_access(uint16_t conn, uint16_t attr,
         uint8_t rec = buf[4]==0x97 ? 0x03 : buf[4]==0x96 ? 0x02 : 0x00;
         if (rec) {
             nb_cache_t w; nb_get_warm((uint8_t)id, rec, &w);
-            if (w.len) ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
+            nb_identity_t it; nb_get_identity((uint8_t)id, &it);
+            if (w.len && it.notify_enabled) {
+                ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
+            } else if (w.len) {
+                /* The app writes its opener BEFORE subscribing (measured with
+                 * app_probe 2026-08-30), so an instant replay here would be
+                 * dropped by the CCCD gate. Owe it; the tunnel task's
+                 * replay tick delivers once notifications come up. */
+                nb_mark_replay((uint8_t)id, rec == 0x03 ? NB_REPLAY_DEVINFO
+                                                        : NB_REPLAY_CELLINFO);
+            }
         }
     }
     return 0;
+}
+
+/* Deliver replays owed by chr2_access. Called ~10 Hz from the tunnel task —
+ * a safe notify context (it already forwards the raw stream); NEVER call
+ * from the subscribe callback (that wedged the live stream, 2026-08-30). */
+void ble_periph_replay_tick(void)
+{
+    for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
+        nb_identity_t it; nb_get_identity(id, &it);
+        if (!it.connected || !it.notify_enabled || !it.pending_replay) continue;
+        uint8_t bits = nb_take_replay(id);
+        for (int r = 0; r < 2; r++) {
+            uint8_t bit = r == 0 ? NB_REPLAY_DEVINFO : NB_REPLAY_CELLINFO;
+            if (!(bits & bit)) continue;
+            nb_cache_t w; nb_get_warm(id, r == 0 ? 0x03 : 0x02, &w);
+            if (w.len) ble_periph_forward_notify(id, 0, w.data, w.len);
+        }
+    }
 }
 
 static const struct ble_gatt_svc_def s_svcs[] = {

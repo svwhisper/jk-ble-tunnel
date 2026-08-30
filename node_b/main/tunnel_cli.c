@@ -167,6 +167,11 @@ static void serve(int s)
             last_rx = esp_timer_get_time();
             on_frame(h[0], h[1], pl, plen);
         }
+        /* Deliver warm replays owed to apps whose CCCD came up after their
+         * opener write (~10 Hz — this loop's select tick). This task already
+         * runs the notify chain for TUN_RAW, so it is a proven-safe context. */
+        ble_periph_replay_tick();
+
         int64_t now = esp_timer_get_time();
         if (now - last_ping > CFG_TUNNEL_PING_MS*1000LL) {
             uint8_t o[TUNNEL_HDR_LEN]; uint16_t n = frame(o, TUN_PING, TUNNEL_BMS_ID_LINK, NULL, 0);

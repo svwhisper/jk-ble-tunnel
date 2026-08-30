@@ -14,6 +14,16 @@
 #define NB_MAX_CHARS   8
 #define NB_CACHE_MAX   320   /* per (identity,idx) cached read value */
 
+/* Oldest cell-info frame we will replay to the app as a warm start. Stale
+ * voltages presented as live are worse than a blank screen; 10 min covers a
+ * mortal bank's snapshot cadence (~5m20s) with margin. Device-info has no
+ * age limit — it is static content. */
+#define NB_CELL_REPLAY_MAX_AGE_US (10LL * 60 * 1000000)
+
+/* pending_replay bitmask */
+#define NB_REPLAY_DEVINFO  0x01
+#define NB_REPLAY_CELLINFO 0x02
+
 typedef struct {
     uint16_t len;
     uint8_t  data[NB_CACHE_MAX];
@@ -42,8 +52,16 @@ typedef struct {
      * app's opener (0x97/0x96) instantly from cache when the real link is
      * asleep — otherwise the app times out ("request device information
      * failure") waiting for A to wake and scan-find a sleeping module. */
-    nb_cache_t warm_devinfo;   /* last 0x03 frame */
-    nb_cache_t warm_cellinfo;  /* last 0x02 frame */
+    nb_cache_t warm_devinfo;   /* last 0x03 frame (NVS-persisted — static)  */
+    nb_cache_t warm_cellinfo;  /* last 0x02 frame (RAM only, age-gated)     */
+    int64_t    warm_cell_us;   /* when warm_cellinfo was captured           */
+
+    /* Replay owed to the app but blocked by a disabled CCCD at write time
+     * (the app writes its 0x97 opener BEFORE subscribing — measured with
+     * app_probe 2026-08-30). Delivered by ble_periph_replay_tick() from the
+     * tunnel task once notifications come up — NEVER from the subscribe
+     * callback (that wedged the live stream, 2026-08-30). */
+    uint8_t    pending_replay; /* NB_REPLAY_* bits */
 } nb_identity_t;
 
 typedef struct {
@@ -64,9 +82,17 @@ void nb_set_link(uint8_t bms_id, tunnel_link_state_t s);
 void nb_set_cache(uint8_t bms_id, uint8_t idx, const uint8_t *data, uint16_t len);
 void nb_get_cache(uint8_t bms_id, uint8_t idx, nb_cache_t *out);
 
-/* Warm-start frame cache (device-info 0x03 / cell-info 0x02). `rec` selects. */
+/* Warm-start frame cache (device-info 0x03 / cell-info 0x02). `rec` selects.
+ * set: a devinfo frame is also persisted to NVS (once — the comparison skips
+ * the frame counter), so it survives a Node B reboot.
+ * get: a cell-info frame older than NB_CELL_REPLAY_MAX_AGE_US comes back
+ * len=0 — the age gate applies to every replay path. */
 void nb_set_warm(uint8_t bms_id, uint8_t rec, const uint8_t *frame, uint16_t len);
 void nb_get_warm(uint8_t bms_id, uint8_t rec, nb_cache_t *out);
+
+/* Deferred replay owed to a connected app whose CCCD was off at write time. */
+void    nb_mark_replay(uint8_t bms_id, uint8_t bits);
+uint8_t nb_take_replay(uint8_t bms_id);   /* returns and clears the bits */
 
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);
