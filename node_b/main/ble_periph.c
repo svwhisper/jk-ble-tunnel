@@ -226,6 +226,7 @@ void ble_periph_replay_tick(void)
      * its own frames small (see serve()) — don't stack a 322 B cache under
      * the notify chain. */
     static nb_cache_t w;
+    static uint8_t s_ctr = 0x40;   /* replay frame counter, see stamp below */
     /* Delivery order: devinfo, settings, cell-info — the app's own ladder. */
     static const struct { uint8_t bit, rec; } seq[] = {
         { NB_REPLAY_DEVINFO,  0x03 },
@@ -245,15 +246,21 @@ void ble_periph_replay_tick(void)
         ESP_LOGI(TAG, "id %u replay deliver bits=0x%02X", id, bits);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
-            if (seq[r].rec == 0x03) {          /* both devinfo pages, A then B */
-                for (int p = 0; p < 2; p++) {
-                    nb_get_warm_dev(id, p, &w);
-                    if (w.len) ble_periph_forward_notify(id, 0, w.data, w.len);
-                }
-                continue;
+            if (seq[r].rec == 0x03) nb_get_warm_dev(id, 0, &w);
+            else                     nb_get_warm(id, seq[r].rec, &w);
+            if (!w.len) continue;
+            /* Stamp a FRESH frame counter and re-checksum: the app dedupes
+             * on byte 5 — a cached frame replayed twice is silently
+             * discarded the second time (proved 14:28: identical replay
+             * accepted right after a cache refresh, ignored before and
+             * after). Every replay must look like a new frame. */
+            if (w.len >= 6) {
+                w.data[5] = s_ctr++;
+                uint8_t sum = 0;
+                for (uint16_t k = 0; k < w.len - 1; k++) sum += w.data[k];
+                w.data[w.len - 1] = sum;
             }
-            nb_get_warm(id, seq[r].rec, &w);
-            if (w.len) ble_periph_forward_notify(id, 0, w.data, w.len);
+            ble_periph_forward_notify(id, 0, w.data, w.len);
         }
     }
 }
