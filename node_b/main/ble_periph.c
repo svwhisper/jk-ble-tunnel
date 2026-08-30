@@ -46,6 +46,42 @@ static int identity_for_conn(uint16_t handle)
 }
 
 /* ---- GATT access callback (synchronous, host task) --------------------- */
+/* Opener warm replay, shared by BOTH write characteristics: the phone app
+ * writes its 0x97/0x96 opener on FFE1 (proved live 2026-08-30 — replay
+ * hooked only into FFE2 never fired for the phone), app_probe on FFE2.
+ * 0x97 -> device-info; 0x96 -> settings THEN cell-info (the module streams
+ * both after a 96, and the app appears to need settings before it paints). */
+static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
+{
+    if (len < 5 || buf[0]!=0xAA || buf[1]!=0x55 || buf[2]!=0x90 || buf[3]!=0xEB)
+        return;
+    static const uint8_t recs97[] = { 0x03, 0 };
+    static const uint8_t recs96[] = { 0x01, 0x02, 0 };
+    const uint8_t *recs = buf[4]==0x97 ? recs97
+                        : buf[4]==0x96 ? recs96 : NULL;
+    if (!recs) return;
+    bool ready = nb_notify_ready((uint8_t)id);
+    ESP_LOGI(TAG, "id %d opener 0x%02X %s", id, buf[4],
+             ready ? "replay-now" : "replay-owed");
+    for (int i = 0; recs[i]; i++) {
+        /* Flags only — nb_identity_t is ~3.3 KB and this runs on the
+         * nimble_host stack (whole-struct copy = the 2026-08-30 panic). */
+        nb_cache_t w; nb_get_warm((uint8_t)id, recs[i], &w);
+        if (!w.len) continue;
+        if (ready) {
+            ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
+        } else {
+            /* Opener can precede the CCCD enable; an instant replay would be
+             * dropped by the gate. Owe it; the tunnel task's replay tick
+             * delivers once notifications come up. */
+            nb_mark_replay((uint8_t)id,
+                           recs[i] == 0x03 ? NB_REPLAY_DEVINFO
+                         : recs[i] == 0x01 ? NB_REPLAY_SETTINGS
+                                           : NB_REPLAY_CELLINFO);
+        }
+    }
+}
+
 static int chr_access(uint16_t conn, uint16_t attr,
                       struct ble_gatt_access_ctxt *ctxt, void *arg)
 {
@@ -68,6 +104,11 @@ static int chr_access(uint16_t conn, uint16_t attr,
          * confirms at the frame level via notifications, not ATT status. */
         bool with_resp = (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR);
         tunnel_cli_send_write(id, 0, with_resp, buf, len);
+        /* THE APP'S OPENER ARRIVES HERE, ON FFE1 — not FFE2 (proved live
+         * 2026-08-30: appwrites flowed while the FFE2 handler logged
+         * nothing). Replay-on-FFE2-only meant the phone NEVER got a warm
+         * replay; only app_probe (which wrote FFE2) did. Hook both paths. */
+        maybe_replay_opener(id, buf, len);
         return 0;
     }
     default:
@@ -175,35 +216,7 @@ static int chr2_access(uint16_t conn, uint16_t attr,
      * can't answer in time and the app fails with "request device information
      * failure". Answer instantly from B's warm cache so the app stays
      * connected; the live stream takes over once A wakes the module. */
-    if (len >= 5 && buf[0]==0xAA && buf[1]==0x55 && buf[2]==0x90 && buf[3]==0xEB) {
-        /* 0x97 -> device-info; 0x96 -> settings THEN cell-info (the module
-         * streams both after a 96, and the app appears to need the settings
-         * frame before it paints the cell screen). */
-        static const uint8_t recs97[] = { 0x03, 0 };
-        static const uint8_t recs96[] = { 0x01, 0x02, 0 };
-        const uint8_t *recs = buf[4]==0x97 ? recs97
-                            : buf[4]==0x96 ? recs96 : NULL;
-        bool ready = recs && nb_notify_ready((uint8_t)id);
-        for (int i = 0; recs && recs[i]; i++) {
-            /* Flags only — nb_identity_t is ~3.3 KB and this callback runs
-             * on the nimble_host stack (whole-struct copy = the 2026-08-30
-             * stack-protection panic). */
-            nb_cache_t w; nb_get_warm((uint8_t)id, recs[i], &w);
-            if (!w.len) continue;
-            if (ready) {
-                ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
-            } else {
-                /* The app writes its opener BEFORE subscribing (measured with
-                 * app_probe 2026-08-30), so an instant replay here would be
-                 * dropped by the CCCD gate. Owe it; the tunnel task's
-                 * replay tick delivers once notifications come up. */
-                nb_mark_replay((uint8_t)id,
-                               recs[i] == 0x03 ? NB_REPLAY_DEVINFO
-                             : recs[i] == 0x01 ? NB_REPLAY_SETTINGS
-                                               : NB_REPLAY_CELLINFO);
-            }
-        }
-    }
+    maybe_replay_opener(id, buf, len);
     return 0;
 }
 
@@ -406,7 +419,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     }
     case BLE_GAP_EVENT_SUBSCRIBE: {
         int id = nb_identity_for_conn(event->subscribe.conn_handle);
-        if (id >= 0) nb_set_notify(id, event->subscribe.cur_notify);  /* CCCD */
+        if (id >= 0) {
+            nb_set_notify(id, event->subscribe.cur_notify);           /* CCCD */
+            ESP_LOGI(TAG, "id %d cccd=%d", id, event->subscribe.cur_notify);
+        }
         /* NOTE: do NOT send notifications from inside this handler — replaying
          * warm frames here (2026-08-30 attempt) wedged the live stream to the
          * app (bank 1 connected but showed no data). Warm replay stays on the

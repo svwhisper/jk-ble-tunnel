@@ -193,8 +193,10 @@ static void write_cccd(void)
 
 static void write_cmd(uint8_t op)
 {
+    /* FFE1, like the real app (proved live 2026-08-30: the phone's opener
+     * arrives on FFE1, not FFE2 — writing FFE2 here masked a Node B bug). */
     uint8_t f[20]; jk_cmd(f, op);
-    int rc = ble_gattc_write_no_rsp_flat(s_conn, s_ffe2, f, sizeof(f));
+    int rc = ble_gattc_write_no_rsp_flat(s_conn, s_ffe1, f, sizeof(f));
     printf("CMD +%lu op=0x%02X rc=%d\n", (unsigned long)ms_now(), op, rc);
 }
 
