@@ -93,6 +93,17 @@ the TUN off the air). Jig result: 4/4 rapid-cycle bank-1 sessions got
 devinfo at 1-3 s. Diagnostics kept: B logs opener/link/deliver; A logs
 stream over UDP :3766.
 
+**THE ANSWER (after the whole day): the app accepts the opening handshake
+only as a WHOLE.** A lone replayed devinfo — rich, fresh-countered,
+128-chunked, instantly delivered — is always ignored; the app proceeds
+when devinfo arrives WITH settings + cell frames around it, like a live
+armed unit. 97-replay now sends the full stamped burst (dev+settings+
+cells). Phone: bank 1 went 3/3 'quick data'. Corollaries kept en route:
+richest-devinfo caching, fresh counter stamping (byte 5 + re-checksum),
+link-gated delivery with 2 s deaf-link grace, cancel on app-forwarded
+devinfo, all delivery single-tasked on the tunnel tick. The app's PIN
+prompt is Settings-only ('verify password') — not part of connecting.
+
 **STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
 answers link-up polls (last_seen = link-up moment) then goes deaf: later
 0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE
