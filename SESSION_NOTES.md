@@ -2,6 +2,19 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-08-31: NIGHTLY REBOOT + POST-REBOOT CHECK LIVE; BANK-0 STALL IS SESSION-LINKED
+Nightly maintenance reboot deployed (A 01:00, B 01:05 local, DST-aware,
+unconditional, >2h-uptime guard; B gained SNTP). NR '.5 BMS tab' gained a
+"JK post-reboot check" group: jkbms/bridge/boot -> 120 s -> verify all 4
+banks reachable + streaming -> failures written to InfluxDB Logs (mydb,
+"dd.mm.yyyy HH:MM:SS ..." format). Self-test verified end-to-end; its FIRST
+real run caught bank 0 re-stalled after a deploy reboot: the unit streamed
+all evening post-power-cycle, then a fresh A session put it back into
+stream-at-linkup-then-die. STALL IS SESSION-LINKED — expect a bank-0 line
+in Logs most nights until the deep investigation lands (fast-lane writes /
+FFE-path / stall mechanism). Unit-0 app/settings writes still work via the
+retry pattern.
+
 ## ⚠️ OPERATIONAL: iBMS CHARGE CONTROL RE-ENABLED (2026-08-30 evening)
 The experiment-era "Victron ignores the iBMS" condition is OVER. Disable
 iBMS charge control BEFORE any alarm-capable work (cell_count recal, bounce,
