@@ -2,6 +2,19 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-08-30 EOD: WIRE-R RECALIBRATION DECODED (app-driven experiment)
+Trigger = a CELL-COUNT WRITE (reg 0x1C, u32 LE) — even same-value. All 16
+wires re-measure within seconds (+1-2 mOhm vs the stale cached values).
+The forum "balancer off -> start-volt 3.00 -> on" dance alone does NOTHING
+(verified: bit-identical values after a clean MQTT run of it). HAZARD: a
+refused count write (17 on this 16S pack) botched wire 16's measurement —
+unit raised wire_warn_bitmask bit 15 + error bit 0; re-running the trigger
+(owner set 15 then 16 in the app) re-measured and cleared both alarms.
+Check faults==0 after any recal. balance_start_voltage now MQTT-writable
+(0x22, 2.90-3.50 V); cell count 0x1C deliberately NOT whitelisted
+(protection-relevant — app only). New unknown app opcode seen once: 0xA7.
+Baselines: docs/baseline_resistance_2026-08-30.json.
+
 ## READ FIRST — 2026-08-30 PM: APP-CONNECT RELIABILITY FIXED (2 root causes)
 
 The "flaky initial app connect" resolved into two separate bugs, both
