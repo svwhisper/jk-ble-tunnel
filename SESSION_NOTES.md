@@ -73,6 +73,15 @@ re-tap. Rule of thumb earned today: anything B sends on FFE1 must be
 byte-for-byte and timing-plausibly THE MODULE — the app tolerates nothing
 else.
 
+**AND the devinfo is TWO PAGES** (post-gauntlet discovery): page A =
+model/hw/sw/serial, page B = versions zeroed + passcode/mfg-date. Cache
+held whichever arrived last; a page-B-only replay = "device is not
+supported" / ignored — the phone likely NEVER accepted a replay before
+this. Now cached per page (NVS wa*/wb*), replayed A-then-B. Node A also
+gained a **UDP log mirror** (broadcast :3766, `nc -ulk 3766`) — the garage
+console is finally observable; next fresh-link 0x216 thrash (bank 1,
+twice seen, unexplained) will be caught in it.
+
 **STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
 answers link-up polls (last_seen = link-up moment) then goes deaf: later
 0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE
