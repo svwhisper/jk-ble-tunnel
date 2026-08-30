@@ -89,7 +89,7 @@ static void on_frame(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
         break;
     case TUN_RAW:                             /* [idx][verbatim BMS chunk] */
         if (len >= 1) {
-            nb_note_raw(id);                  /* replays defer while live flows */
+            nb_note_raw_chunk(id, pl+1, len-1);  /* frame-boundary tracking */
             ble_periph_forward_notify(id, pl[0], pl+1, len-1);
         }
         break;

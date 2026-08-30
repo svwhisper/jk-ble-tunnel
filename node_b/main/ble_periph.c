@@ -60,43 +60,21 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
     const uint8_t *recs = buf[4]==0x97 ? recs97
                         : buf[4]==0x96 ? recs96 : NULL;
     if (!recs) return;
-    /* NEVER interleave a replay with the live stream: the app reassembles
-     * one contiguous byte stream, and replay chunks landing mid-frame
-     * corrupted its devinfo ("device is not supported" on quick re-taps,
-     * 2026-08-30). If live raw flowed recently, the unit itself answers the
-     * opener in-stream — the mode that always worked. Openers are always
-     * owed; the tick delivers them only into a quiet pipe (and the live
-     * answer usually makes them moot first). */
-    bool ready = nb_notify_ready((uint8_t)id) &&
-                 nb_raw_quiet((uint8_t)id, 500000);
-    ESP_LOGI(TAG, "id %d opener 0x%02X %s", id, buf[4],
-             ready ? "replay-now" : "replay-owed");
+    /* This callback runs on nimble_host; replay DELIVERY happens only on
+     * the tunnel task's tick, which also forwards the live TUN_RAW stream —
+     * one task, total ordering, mid-frame interleave structurally
+     * impossible (the 2026-08-30 "device is not supported" class). The tick
+     * fires within 100 ms and injects at a frame boundary. */
+    ESP_LOGI(TAG, "id %d opener 0x%02X owed", id, buf[4]);
     for (int i = 0; recs[i]; i++) {
-        /* Flags only — nb_identity_t is ~3.3 KB and this runs on the
-         * nimble_host stack (whole-struct copy = the 2026-08-30 panic). */
-        nb_cache_t w;
-        if (recs[i] == 0x03 && ready) {
-            /* Devinfo = BOTH pages, A then B, like the module sends them
-             * (a page-B-only replay = "device is not supported"). */
-            for (int p = 0; p < 2; p++) {
-                nb_get_warm_dev((uint8_t)id, p, &w);
-                if (w.len) ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
-            }
-            continue;
-        }
-        nb_get_warm((uint8_t)id, recs[i], &w);
+        nb_cache_t w;   /* flags/copies only — never nb_identity_t here */
+        if (recs[i] == 0x03) nb_get_warm_dev((uint8_t)id, 0, &w);
+        else                 nb_get_warm((uint8_t)id, recs[i], &w);
         if (!w.len) continue;
-        if (ready) {
-            ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
-        } else {
-            /* CCCD not up yet, or live traffic in flight. Owe it; the
-             * tunnel task's tick delivers when notifications are on AND
-             * the pipe has gone quiet. */
-            nb_mark_replay((uint8_t)id,
-                           recs[i] == 0x03 ? NB_REPLAY_DEVINFO
-                         : recs[i] == 0x01 ? NB_REPLAY_SETTINGS
-                                           : NB_REPLAY_CELLINFO);
-        }
+        nb_mark_replay((uint8_t)id,
+                       recs[i] == 0x03 ? NB_REPLAY_DEVINFO
+                     : recs[i] == 0x01 ? NB_REPLAY_SETTINGS
+                                       : NB_REPLAY_CELLINFO);
     }
 }
 
@@ -255,11 +233,11 @@ void ble_periph_replay_tick(void)
     };
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         if (!nb_replay_ready(id)) continue;
-        /* Quiet-pipe gate (see maybe_replay_opener): while live raw chunks
-         * flow, hold the pending replay — the live answer covers the app,
-         * and injecting mid-frame corrupts its reassembly. If the stream
-         * dies mid-opener, the pipe goes quiet and this delivers ~0.6 s in. */
-        if (!nb_raw_quiet(id, 500000)) continue;
+        /* Inject only at a JK frame boundary: this task also forwards the
+         * live raw stream, so delivery here can never split a live frame —
+         * and a boundary comes within ~100 ms even on a busy stream (or
+         * instantly once a stream dies). */
+        if (!nb_at_frame_boundary(id)) continue;
         uint8_t bits = nb_take_replay(id);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
