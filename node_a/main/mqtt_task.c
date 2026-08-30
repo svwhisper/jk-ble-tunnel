@@ -193,6 +193,7 @@ static void on_cmd(const char *t, int tlen, const char *data, int dlen)
     if      (!strcmp(what, "balance/set")) arbiter_balance_set(id, body, cid);
     else if (!strcmp(what, "measure"))     arbiter_measure(id, cid);
     else if (!strcmp(what, "refresh"))     arbiter_refresh(id, cid);
+    else if (!strcmp(what, "bounce"))      arbiter_bounce(id);
     if (j) cJSON_Delete(j);
 }
 

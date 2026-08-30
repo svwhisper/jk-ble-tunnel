@@ -432,6 +432,19 @@ void arbiter_poll(uint8_t id, uint8_t opcode)
                         .opcode = opcode, .response_needed = true, .timeout_ms = 3000 };
     arbiter_submit(&r);
 }
+/* Bounce: force a disconnect/reconnect of the REAL link. Bank 0's Telink
+ * unit answers commands only in the seconds after a fresh connect (deaf
+ * thereafter, 2026-08-30) — queueing a write right after a bounce lands it
+ * inside that window. The disconnect goes through the normal txn path; the
+ * next queued command re-raises the link on dispatch. */
+void arbiter_bounce(uint8_t id)
+{
+    bms_request_t r = { .bms_id = id, .kind = TXN_DISCONNECT,
+                        .source = SRC_INTERNAL, .response_needed = true,
+                        .timeout_ms = 3000 };
+    arbiter_submit(&r);
+}
+
 void arbiter_set_app_connected(uint8_t id, bool connected)
 {
     arb_msg_t m = { .kind = ARB_APP_CONN, .bms_id = id, .connected = connected };

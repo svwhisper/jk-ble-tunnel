@@ -145,6 +145,17 @@ link-gated delivery with 2 s deaf-link grace, cancel on app-forwarded
 devinfo, all delivery single-tasked on the tunnel tick. The app's PIN
 prompt is Settings-only ('verify password') — not part of connecting.
 
+**BANK-0 RECAL ATTEMPTS (2026-08-30 evening, both failed — window race):**
+`cmd/bounce` (new: jkbms/<id>/cmd/bounce -> TXN_DISCONNECT; next queued cmd
+re-raises the link) works — link provably drops/re-raises. But the queued
+cell_count write dispatches seconds AFTER the link-up bootstrap traffic and
+lands in the deaf zone (txn timeouts, strikes 3-7). The unit DOES accept
+FFE1 polls at link-up instant (last_seen updates), so the window is real
+and ~seconds wide. TO WIN: a first-after-connect fast lane for queued
+app/MQTT writes (ahead of the opener), plus FFE1-vs-FFE2 write-path
+experiments on this module. Note: verifying any recal needs bank 0's cell
+stream back — same investigation as the stall.
+
 **STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
 answers link-up polls (last_seen = link-up moment) then goes deaf: later
 0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE

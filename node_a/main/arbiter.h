@@ -27,5 +27,6 @@ void arbiter_clear_pending(uint8_t bms_id);  /* flush stale poll ring (link-up) 
 void arbiter_balance_set(uint8_t bms_id, const char *json, const char *id);
 void arbiter_measure(uint8_t bms_id, const char *id);
 void arbiter_refresh(uint8_t bms_id, const char *id);
+void arbiter_bounce(uint8_t bms_id);      /* drop + let next cmd re-raise the link */
 
 #endif /* ARBITER_H */
