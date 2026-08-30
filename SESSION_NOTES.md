@@ -2,7 +2,21 @@
 
 Living design/status doc. Keep current alongside code changes.
 
-## 2026-08-30 EOD v2: WIRE-R RECAL — TRIGGER STILL UNIDENTIFIED (do not re-guess)
+## 2026-08-30 FINAL: WIRE-R RECAL SOLVED — count-write WITH BALANCER ON
+The trigger IS the cell-count write — but ONLY with the balancer ENABLED:
+`cell_count 15 -> 5 s -> cell_count 16` (balancer untouched, ON). Owner
+proved it on bank 2 (app), then validated end-to-end over MQTT on bank 3
+(both acks ok, count 15 VERIFIED APPLIED — first time ever). The
+balancer-OFF step in the forum folklore was the poison: with balancer off
+the unit refuses the count write (bank 2's "failures") or botches a wire
+(bank 1's wire-16 + alarms). Wires re-measure SEQUENTIALLY over ~1 min.
+Results: bank 2 13/16 changed (odd-cell highs dropped 4-8 mOhm — the
+odd/even split was partly stale artifact), bank 3 11/16 (cell-11 outlier
+0.105->0.099). All banks freshly calibrated 2026-08-30, faults 0
+everywhere. MQTT: jkbms/<id>/cmd/balance/set {"cell_count":15|16}
+(whitelist-clamped 15..16). NEVER while iBMS charge control is live.
+
+## (superseded) 2026-08-30 EOD v2: WIRE-R RECAL — TRIGGER STILL UNIDENTIFIED
 Falsified by experiment on bank 2: (a) the forum off/start-volt/on dance
 (zero change); (b) "active balancer calibrates on engagement" — balancer
 CONFIRMED running 2.5 min (summary balancing:true x152) via trigger 0.003 +
