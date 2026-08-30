@@ -2,7 +2,21 @@
 
 Living design/status doc. Keep current alongside code changes.
 
-## 2026-08-30 EOD: WIRE-R RECALIBRATION DECODED (app-driven experiment)
+## 2026-08-30 EOD v2: WIRE-R RECAL — TRIGGER STILL UNIDENTIFIED (do not re-guess)
+Falsified by experiment on bank 2: (a) the forum off/start-volt/on dance
+(zero change); (b) "active balancer calibrates on engagement" — balancer
+CONFIRMED running 2.5 min (summary balancing:true x152) via trigger 0.003 +
+start 3.00, ZERO change; (c) cell-count write as trigger — count 15/17 was
+NEVER observed applied on ANY unit (settings always 16); bank 2 refuses it
+outright (writes delivered, value unchanged). Bank 1 recalibrated twice
+during app sessions containing count-write attempts — actual trigger
+unidentified (candidates: opcode 0xA7, alarm-state interaction, unit-
+specific looseness). cell_count now MQTT-writable (0x1C, clamped 15-16) —
+NEVER while iBMS charge control is live (transient error would drop
+Victron power). Bank 2/3 wire-R values are stale but STABLE. Next recal
+sighting on bank 1: capture with A-UDP running to catch write results.
+
+## 2026-08-30 EOD (superseded above): WIRE-R RECALIBRATION "DECODED" (app-driven experiment)
 Trigger = a CELL-COUNT WRITE (reg 0x1C, u32 LE) — even same-value. All 16
 wires re-measure within seconds (+1-2 mOhm vs the stale cached values).
 The forum "balancer off -> start-volt 3.00 -> on" dance alone does NOTHING

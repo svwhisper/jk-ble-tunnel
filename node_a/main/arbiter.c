@@ -230,7 +230,8 @@ static void handle_balance_set(uint8_t id, const char *json, const char *cid)
     rb->active = true;
     rb->which  = !strcmp(it->string, "balance_current") ? 1
                : !strcmp(it->string, "balancing_enabled") ? 2
-               : !strcmp(it->string, "balance_start_voltage") ? 3 : 0;
+               : !strcmp(it->string, "balance_start_voltage") ? 3
+               : !strcmp(it->string, "cell_count") ? 4 : 0;
     rb->target = v;
     strlcpy(rb->key, it->string, sizeof(rb->key));
     strlcpy(rb->cid, cid ? cid : "", sizeof(rb->cid));
@@ -265,6 +266,7 @@ static void rb_on_settings(uint8_t id)
     double got = rb->which == 1 ? st.settings.balance_current_a
                : rb->which == 2 ? (st.settings.balancing_enabled ? 1.0 : 0.0)
                : rb->which == 3 ? st.settings.balance_start_v
+               : rb->which == 4 ? (double)st.settings.cell_count_set
                : st.settings.balance_trigger_v;
     /* Tolerance: half the register's least count (0.5 mV / 0.5 mA), booleans exact. */
     double tol = rb->which == 2 ? 0.5 : 0.0005;

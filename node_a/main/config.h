@@ -116,6 +116,12 @@ static const cfg_range_t CFG_BALANCE_RANGE[] = {
                                                    * covers the recalibration
                                                    * procedure (3.0) and the
                                                    * normal setpoint (3.42) */
+    { "cell_count",              15.0,  16.0  },  /* recal trigger ONLY — writing it
+                                                   * (even same-value) re-measures all
+                                                   * wire resistances. NEVER while iBMS
+                                                   * charge control is live: the
+                                                   * transient error would drop
+                                                   * Victron power. */
 };
 #define CFG_BALANCE_RANGE_N (sizeof(CFG_BALANCE_RANGE)/sizeof(CFG_BALANCE_RANGE[0]))
 

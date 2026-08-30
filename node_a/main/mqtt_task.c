@@ -268,6 +268,7 @@ void mqtt_publish_settings(uint8_t id)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddNumberToObject(o, "balance_trigger_voltage", s.settings.balance_trigger_v);
     cJSON_AddNumberToObject(o, "balance_start_voltage",   s.settings.balance_start_v);
+    cJSON_AddNumberToObject(o, "cell_count",              s.settings.cell_count_set);
     cJSON_AddNumberToObject(o, "balance_current",         s.settings.balance_current_a);
     cJSON_AddBoolToObject(o,   "balancing_enabled",       s.settings.balancing_enabled);
     char *out = cJSON_PrintUnformatted(o);

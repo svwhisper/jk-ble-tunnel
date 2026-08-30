@@ -205,6 +205,7 @@ int jk_decode_settings(jk_frame_ver_t ver, const uint8_t *frame, uint16_t len,
     out->balance_current_a = rd_u32(&frame[78]) / 1000.0f;
     out->balancing_enabled = rd_u32(&frame[126]) != 0;
     out->balance_start_v   = rd_u32(&frame[138]) / 1000.0f;
+    out->cell_count_set    = rd_u32(&frame[114]);
     return 0;
 }
 
@@ -266,6 +267,10 @@ static const jk_setting_reg_t JK_SETTING_REGS[] = {
     /* Register from esphome-jk-bms JK02_32S map (trigger/current/enable all
      * cross-check against our live app captures, anchoring the table). */
     { "balance_start_voltage",   0x22, 1000.0 },  /* millivolts, ABSOLUTE                */
+    /* Cell count: the wire-R recalibration trigger (writing it — even the
+     * same value — makes the unit re-measure every balance wire). Whitelist
+     * clamps it to 15..16 so this path can never mis-set a real pack. */
+    { "cell_count",              0x1C,    1.0 },
 };
 #define JK_SETTING_REGS_N (sizeof(JK_SETTING_REGS)/sizeof(JK_SETTING_REGS[0]))
 
