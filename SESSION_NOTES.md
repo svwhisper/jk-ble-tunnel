@@ -39,6 +39,20 @@ subscribe, cell replay 1.9 s, live stream 2.6 s, full session, no crash.
   run a session, 'o' toggles write-first/subscribe-first, hex-logs every
   notify with ms stamps. Never sends 0x6C (junk RTC).
 
+**LATER 2026-08-30 PM — the dark-TUN class (the real "never displays"):**
+Two ways an identity went dark until reboot: (1) a connection held after its
+central died with no disconnect event; (2) a connection whose CONNECT event
+never reached ble_periph at all (ATT served, nothing logged) — the ext-adv
+instance auto-stops on connect and adv_mgr's stale `advertising=true` meant
+nothing restarted it. Fixes: ADV_COMPLETE handled (controller truth + conn
+adoption by INSTANCE when CONNECT is missing), per-tick `adv_mgr_audit()` +
+`ble_periph_audit_conns()` (any stranded set/conn heals within 10 s), loud
+logs on unmapped connects, and the connect handler's own ~3.3 KB
+nb_identity_t stack copy removed (suspected author of the vanished event).
+Settings frames (0x01) joined the warm replay on 0x96. Verified: kill-test
+heals in 12 s; sleeping bank serves devinfo 244 ms / settings 0.7 s / cells
+0.8 s after subscribe, live at 2.2 s.
+
 **STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
 answers link-up polls (last_seen = link-up moment) then goes deaf: later
 0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE
