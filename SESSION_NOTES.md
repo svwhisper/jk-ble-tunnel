@@ -82,6 +82,17 @@ gained a **UDP log mirror** (broadcast :3766, `nc -ulk 3766`) — the garage
 console is finally observable; next fresh-link 0x216 thrash (bank 1,
 twice seen, unexplained) will be caught in it.
 
+**GRIND FINALE — the deaf-live-link class:** mortal modules stream while
+their inbound is already dead (97 forwarded -> 'txn timeout, link held'),
+and A's raw forwarding can lag a re-attach — so neither "link up" nor
+"unit emitted devinfo" implies the app heard anything. B's replay logic is
+now: link down -> deliver instantly; link up -> 2 s grace, cancel only on
+a devinfo chunk actually forwarded to the app, else deliver anyway. A no
+longer marks a dozy bank UNREACHABLE on app link-up timeout (that pulled
+the TUN off the air). Jig result: 4/4 rapid-cycle bank-1 sessions got
+devinfo at 1-3 s. Diagnostics kept: B logs opener/link/deliver; A logs
+stream over UDP :3766.
+
 **STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
 answers link-up polls (last_seen = link-up moment) then goes deaf: later
 0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE
