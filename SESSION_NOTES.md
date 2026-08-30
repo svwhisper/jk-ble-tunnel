@@ -53,6 +53,14 @@ Settings frames (0x01) joined the warm replay on 0x96. Verified: kill-test
 heals in 12 s; sleeping bank serves devinfo 244 ms / settings 0.7 s / cells
 0.8 s after subscribe, live at 2.2 s.
 
+**LATER STILL — the phone's opener is on FFE1 (the real fix):** the app
+writes 97/96/6C to **FFE1** on the clones (live-proved; the 08-29 "opener
+via FFE2" note is wrong for app→clone sessions). Warm replay was hooked
+into FFE2 only, so the PHONE never received a replay — every probe pass
+was a false comfort (app_probe wrote FFE2). `maybe_replay_opener()` now
+serves both chars; app_probe writes FFE1. Quick re-taps that catch the
+module mid-0x208 were exactly the "Request device information failure".
+
 **STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
 answers link-up polls (last_seen = link-up moment) then goes deaf: later
 0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE
