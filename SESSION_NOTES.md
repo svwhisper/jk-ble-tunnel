@@ -61,6 +61,18 @@ was a false comfort (app_probe wrote FFE2). `maybe_replay_opener()` now
 serves both chars; app_probe writes FFE1. Quick re-taps that catch the
 module mid-0x208 were exactly the "Request device information failure".
 
+**FINAL 2026-08-30 PM — replay must impersonate the module perfectly:**
+two last app-killers after the FFE1 fix, both from phone reports: (1) the
+app ignores notification chunks >128 B (the bridge's native max) — replay
+now chunks at 128; (2) replays interleaved with live TUN_RAW chunks corrupt
+the app's contiguous-stream reassembly ("device is not supported" on quick
+re-taps of a still-streaming bank) — replays now fire only into a quiet
+pipe (no raw for 500 ms; live in-stream answers cover the opener otherwise)
+and expire after 5 s. Probe-verified both modes incl. forced mid-stream
+re-tap. Rule of thumb earned today: anything B sends on FFE1 must be
+byte-for-byte and timing-plausibly THE MODULE — the app tolerates nothing
+else.
+
 **STILL OPEN — bank 0 stream stall:** with ONE clean connection unit 0
 answers link-up polls (last_seen = link-up moment) then goes deaf: later
 0x96 refreshes elicit NOTHING (tested twice on a clean handle). Its BLE
