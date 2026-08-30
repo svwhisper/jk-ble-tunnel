@@ -80,12 +80,14 @@ void nb_set_warm(uint8_t id, uint8_t rec, const uint8_t *frame, uint16_t len)
                   : rec == 0x02 ? &s_id[id].warm_cellinfo : NULL;
     if (w) {
         if (rec == 0x03) {
-            /* Persist only on real change. Byte 5 is a rolling frame counter
-             * and the last byte its checksum — both differ every frame while
-             * the payload is static, so compare bytes 6..len-2 to keep this
-             * a write-once (NVS wear). */
-            persist = !(w->len == len && len > 7 &&
-                        memcmp(w->data + 6, frame + 6, len - 7) == 0);
+            /* Persist only on identity change. Devinfo carries live fields —
+             * frame counter (byte 5), module uptime (u32 @38), checksum —
+             * that differ every frame, so comparing the whole payload
+             * rewrote NVS on each devinfo (observed 2026-08-30). The stable
+             * identity is the model/hw/fw strings at bytes 6..37; that is
+             * what write-once means here. */
+            persist = !(w->len == len && len >= 38 &&
+                        memcmp(w->data + 6, frame + 6, 32) == 0);
         } else {
             s_id[id].warm_cell_us = esp_timer_get_time();
         }
