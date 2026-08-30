@@ -2,6 +2,21 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-08-30 NIGHTCAP: BANK 0 ALIVE + FFE1 IS THE UNIVERSAL WRITE CHANNEL
+Owner power-cycled unit 0 ("BMS 0 was wedged") — it has streamed
+continuously since (>10 min vs the historic ~100 s stall): the deaf-inbound
+stall was plausibly a long-hung bridge MCU, not endemic. CHANNEL DISCOVERY:
+unit 0's Telink ACKs FFE2 writes at ATT level and silently DROPS them (cell
+count via FFE2: delivered, ignored); the app's FFE1 writes recalibrated it.
+TXN_BALANCE_WRITE now rides FFE1 (the app/esphome channel, prop-aware op) —
+regression-verified on bank 3 (trigger 0.011/0.010 round trip) and bank 0
+(cell_count 15 VERIFIED APPLIED — first confirmed settings write to unit 0
+ever; recal ran, faults 0). Fleet 4/4 MQTT-scriptable. Bank-0 wire-R: cells
+10-13 high cluster (0.113-0.124) REPRODUCED across power-on, app recal and
+MQTT recal = real physics/AFE, not stale calibration. WATCH: does unit 0
+stall again over the coming days? cmd/bounce + power-cycle are the known
+remedies. Bank-0 baseline in docs/ alongside the others.
+
 ## 2026-08-30 FINAL: WIRE-R RECAL SOLVED — count-write WITH BALANCER ON
 The trigger IS the cell-count write — but ONLY with the balancer ENABLED:
 `cell_count 15 -> 5 s -> cell_count 16` (balancer untouched, ON). Owner
