@@ -8,12 +8,15 @@ unconditional, >2h-uptime guard; B gained SNTP). NR '.5 BMS tab' gained a
 "JK post-reboot check" group: jkbms/bridge/boot -> 120 s -> verify all 4
 banks reachable + streaming -> failures written to InfluxDB Logs (mydb,
 "dd.mm.yyyy HH:MM:SS ..." format). Self-test verified end-to-end; its FIRST
-real run caught bank 0 re-stalled after a deploy reboot: the unit streamed
-all evening post-power-cycle, then a fresh A session put it back into
-stream-at-linkup-then-die. STALL IS SESSION-LINKED — expect a bank-0 line
-in Logs most nights until the deep investigation lands (fast-lane writes /
-FFE-path / stall mechanism). Unit-0 app/settings writes still work via the
-retry pattern.
+real run caught bank 0 stalled. CORRECTED TIMELINE (owner): unit 0 was
+power-cycled THIS MORNING too — then A's 09:16 deploy reboot started a
+fresh session, the unit streamed only at link-up (last_seen=9) and went
+silent. So a minutes-fresh unit stalled IMMEDIATELY, while yesterday's
+power cycle bought 10+ min of streaming through multiple A reboots and
+MQTT writes. Unit-0 post-boot behavior is a LOTTERY; power cycling is NOT
+a cure. Expect a bank-0 line in Logs most nights until the deep
+investigation (fast-lane writes / FFE-path / stall mechanism). Unit-0
+app/settings writes still work via the retry pattern when it is alive.
 
 ## ⚠️ OPERATIONAL: iBMS CHARGE CONTROL RE-ENABLED (2026-08-30 evening)
 The experiment-era "Victron ignores the iBMS" condition is OVER. Disable
