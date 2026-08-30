@@ -306,6 +306,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_SUBSCRIBE: {
         int id = nb_identity_for_conn(event->subscribe.conn_handle);
         if (id >= 0) nb_set_notify(id, event->subscribe.cur_notify);  /* CCCD */
+        /* NOTE: do NOT send notifications from inside this handler — replaying
+         * warm frames here (2026-08-30 attempt) wedged the live stream to the
+         * app (bank 1 connected but showed no data). Warm replay stays on the
+         * FFE2 write path (chr2_access) only. */
         return 0;
     }
     case BLE_GAP_EVENT_MTU:
