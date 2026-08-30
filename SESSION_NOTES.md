@@ -17,6 +17,17 @@ MQTT recal = real physics/AFE, not stale calibration. WATCH: does unit 0
 stall again over the coming days? cmd/bounce + power-cycle are the known
 remedies. Bank-0 baseline in docs/ alongside the others.
 
+**Unit-0 write quirk (owner-observed via app, 2026-08-30 night):** first
+settings write gets "write error" in the app (confirmation timeout), retry
+succeeds — same shape as our MQTT written_unverified-then-ok. A-side shows
+ALL app writes ATT-acked promptly, no txn errors: transport exonerated.
+The settings echo lagged/skipped the first apply (no cell_count:15 frame in
+the app window despite the recal running). Unit-0 firmware personality:
+either busy-during-rescan starving the confirm, or refuse-then-accept.
+CANDIDATE IMPROVEMENT: arbiter auto-retry ONCE on written_unverified (all
+whitelisted registers are absolute-value = idempotent, so a retry is safe);
+would make MQTT writes to unit 0 one-shot like the trio.
+
 ## 2026-08-30 FINAL: WIRE-R RECAL SOLVED — count-write WITH BALANCER ON
 The trigger IS the cell-count write — but ONLY with the balancer ENABLED:
 `cell_count 15 -> 5 s -> cell_count 16` (balancer untouched, ON). Owner
