@@ -194,6 +194,33 @@ bool nb_get_name(uint8_t id, char *out, size_t out_len)
     return have;
 }
 
+/* A devinfo chunk was actually FORWARDED to the app (not merely emitted by
+ * the unit toward A — that proxy canceled replays while A's raw forwarding
+ * was broken and the app had received nothing, 14:14). */
+void nb_note_dev_forwarded(uint8_t id)
+{ if (id < CFG_NUM_UNITS) { lock(); s_id[id].dev_seen_us = esp_timer_get_time(); unlock(); } }
+
+int nb_replay_action(uint8_t id)
+{
+    if (id >= CFG_NUM_UNITS) return 0;
+    int act = 0;
+    int64_t now = esp_timer_get_time();
+    lock();
+    if (s_id[id].connected && s_id[id].notify_enabled &&
+        s_id[id].pending_replay) {
+        if (now - s_id[id].pending_since_us > 5000000LL) {
+            s_id[id].pending_replay = 0;               /* expired */
+        } else if (s_id[id].dev_seen_us > s_id[id].pending_since_us) {
+            s_id[id].pending_replay = 0; act = 2;      /* live answered */
+        } else if (s_id[id].link != LINK_UP ||
+                   now - s_id[id].pending_since_us > 2000000LL) {
+            act = 1;                                    /* deliver */
+        }
+    }
+    unlock();
+    return act;
+}
+
 tunnel_link_state_t nb_link_state(uint8_t id)
 {
     if (id >= CFG_NUM_UNITS) return LINK_UNREACHABLE;

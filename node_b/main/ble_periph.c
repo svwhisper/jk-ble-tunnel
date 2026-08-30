@@ -65,7 +65,8 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
      * one task, total ordering, mid-frame interleave structurally
      * impossible (the 2026-08-30 "device is not supported" class). The tick
      * fires within 100 ms and injects at a frame boundary. */
-    ESP_LOGI(TAG, "id %d opener 0x%02X owed", id, buf[4]);
+    ESP_LOGI(TAG, "id %d opener 0x%02X owed link=%d", id, buf[4],
+             nb_link_state((uint8_t)id));
     for (int i = 0; recs[i]; i++) {
         nb_cache_t w;   /* flags/copies only — never nb_identity_t here */
         if (recs[i] == 0x03) nb_get_warm_dev((uint8_t)id, 0, &w);
@@ -232,16 +233,16 @@ void ble_periph_replay_tick(void)
         { NB_REPLAY_CELLINFO, 0x02 },
     };
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
-        if (!nb_replay_ready(id)) continue;
-        /* Replay ONLY while the real link is down: a live link answers
-         * openers in-stream (always the fast path), and replay coexisting
-         * with live traffic corrupts the app's reassembly. When the module
-         * dies mid-opener, A's TUN_LINK(down) arrives on the same ordered
-         * stream AFTER the final raw chunk — the pipe is clean by the time
-         * this fires. (Frame-boundary tracking tried + reverted: TUN_RAW
-         * chunks are not frame-aligned.) */
-        if (nb_link_state(id) == LINK_UP) continue;
+        /* Decision matrix (nb_replay_action): link down -> deliver now
+         * (clean pipe); link up -> give the live unit 2 s to answer the
+         * opener in-stream, cancel the debt if it does, deliver anyway if
+         * it stays deaf (mortal modules can stream while their inbound is
+         * dead — 14:09 proof). Delivery is tick-serialized with the live
+         * relay; worst case one live frame resyncs at its next header. */
+        int act = nb_replay_action(id);
+        if (act != 1) continue;
         uint8_t bits = nb_take_replay(id);
+        ESP_LOGI(TAG, "id %u replay deliver bits=0x%02X", id, bits);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
             if (seq[r].rec == 0x03) {          /* both devinfo pages, A then B */
@@ -321,6 +322,13 @@ void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uin
     (void)idx;
     nb_identity_t it; nb_get_identity(id, &it);
     if (!it.connected || !it.notify_enabled) return;   /* CCCD filter (spec §6) */
+
+    /* Stamp devinfo actually reaching the app: the first chunk of a live
+     * 0x03 frame (or a replayed one) starts 55AAEB9003. Used by the replay
+     * grace logic to cancel debts the app has genuinely been answered on. */
+    if (len >= 5 && data[0]==0x55 && data[1]==0xAA && data[2]==0xEB &&
+        data[3]==0x90 && data[4]==0x03)
+        nb_note_dev_forwarded(id);
 
     uint16_t mtu = ble_att_mtu(it.conn_handle);        /* NIMBLE-PASS */
     if (mtu < 23) mtu = 23;

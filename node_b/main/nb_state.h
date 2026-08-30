@@ -76,6 +76,8 @@ typedef struct {
                                   * after the app's opener window — a held
                                   * replay must never inject a stale frame
                                   * into a live session much later. */
+    int64_t    dev_seen_us;      /* last devinfo chunk FORWARDED TO THE APP —
+                                  * proof the app actually heard an answer */
 } nb_identity_t;
 
 typedef struct {
@@ -125,6 +127,15 @@ bool nb_get_name(uint8_t bms_id, char *out, size_t out_len); /* false if unset *
  * and REVERTED 2026-08-30: TUN_RAW chunks are not frame-aligned (AT
  * heartbeats concatenate with frame starts), so it desyncs both ways. */
 tunnel_link_state_t nb_link_state(uint8_t bms_id);
+
+/* Replay decision for the tick (all state read under one lock):
+ *  0 = nothing to do            1 = deliver now
+ *  2 = cancel (live path answered: a devinfo was cached after the debt).
+ * Deliver when the link is down, OR when the debt is older than 2 s with
+ * no devinfo seen — a mortal module's inbound side can be deaf while its
+ * stream still flows (proved 14:09: 9 s of live cells, 97 unanswered). */
+int nb_replay_action(uint8_t bms_id);
+void nb_note_dev_forwarded(uint8_t bms_id);  /* devinfo chunk reached the app */
 
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);

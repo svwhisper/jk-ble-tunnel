@@ -376,7 +376,7 @@ static void check_link_guards(void)
         pend_t *p = &s_pend[id];
         if (p->link_wait_deadline_us && now > p->link_wait_deadline_us
             && !rt_link_held(id)) {
-            ESP_LOGW(TAG, "bms %u app link-up timed out -> unreachable", id);
+            ESP_LOGW(TAG, "bms %u app link-up timed out -> reachable-idle", id);
             p->link_wait_deadline_us = 0;
             /* Flush queued app writes as link-down. */
             bms_request_t r;
@@ -384,9 +384,16 @@ static void check_link_guards(void)
                 if (r.source == SRC_APP)
                     tunnel_send_write_result(id, r.idx, TUN_WR_LINK_DOWN);
             }
+            /* REACHABLE_IDLE, not UNREACHABLE (2026-08-30): this unit was
+             * streaming seconds ago — it is dozy/mortal, not gone. Marking
+             * UNREACHABLE pulled its TUN off the air, so the user's NEXT
+             * attempt could not even find the clone (part of the bank-1
+             * timeout cascade). B's warm replay carries the current app
+             * session; the supervisor's probes will demote a truly dead
+             * unit on their own evidence. */
             bms_runtime_t rt; state_get_runtime(id, &rt);
-            rt.link = LINK_UNREACHABLE; state_set_runtime(id, &rt);
-            tunnel_send_link(id, LINK_UNREACHABLE);  /* B drops the app (spec §5) */
+            rt.link = LINK_REACHABLE_IDLE; state_set_runtime(id, &rt);
+            tunnel_send_link(id, LINK_REACHABLE_IDLE);
         }
     }
 }
