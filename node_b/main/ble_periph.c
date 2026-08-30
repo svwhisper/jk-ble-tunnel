@@ -60,7 +60,15 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
     const uint8_t *recs = buf[4]==0x97 ? recs97
                         : buf[4]==0x96 ? recs96 : NULL;
     if (!recs) return;
-    bool ready = nb_notify_ready((uint8_t)id);
+    /* NEVER interleave a replay with the live stream: the app reassembles
+     * one contiguous byte stream, and replay chunks landing mid-frame
+     * corrupted its devinfo ("device is not supported" on quick re-taps,
+     * 2026-08-30). If live raw flowed recently, the unit itself answers the
+     * opener in-stream — the mode that always worked. Openers are always
+     * owed; the tick delivers them only into a quiet pipe (and the live
+     * answer usually makes them moot first). */
+    bool ready = nb_notify_ready((uint8_t)id) &&
+                 nb_raw_quiet((uint8_t)id, 500000);
     ESP_LOGI(TAG, "id %d opener 0x%02X %s", id, buf[4],
              ready ? "replay-now" : "replay-owed");
     for (int i = 0; recs[i]; i++) {
@@ -71,9 +79,9 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
         if (ready) {
             ble_periph_forward_notify((uint8_t)id, 0, w.data, w.len);
         } else {
-            /* Opener can precede the CCCD enable; an instant replay would be
-             * dropped by the gate. Owe it; the tunnel task's replay tick
-             * delivers once notifications come up. */
+            /* CCCD not up yet, or live traffic in flight. Owe it; the
+             * tunnel task's tick delivers when notifications are on AND
+             * the pipe has gone quiet. */
             nb_mark_replay((uint8_t)id,
                            recs[i] == 0x03 ? NB_REPLAY_DEVINFO
                          : recs[i] == 0x01 ? NB_REPLAY_SETTINGS
@@ -237,6 +245,11 @@ void ble_periph_replay_tick(void)
     };
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         if (!nb_replay_ready(id)) continue;
+        /* Quiet-pipe gate (see maybe_replay_opener): while live raw chunks
+         * flow, hold the pending replay — the live answer covers the app,
+         * and injecting mid-frame corrupts its reassembly. If the stream
+         * dies mid-opener, the pipe goes quiet and this delivers ~0.6 s in. */
+        if (!nb_raw_quiet(id, 500000)) continue;
         uint8_t bits = nb_take_replay(id);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
@@ -314,6 +327,12 @@ void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uin
     uint16_t mtu = ble_att_mtu(it.conn_handle);        /* NIMBLE-PASS */
     if (mtu < 23) mtu = 23;
     uint16_t chunk = mtu - 3;                           /* re-chunk (spec §6)   */
+    /* Cap at the real module's native chunk: the JK bridge never notifies
+     * more than 128 B, and the app IGNORED our MTU-sized (182 B) replay
+     * chunks while accepting the module's 128s (live-proved 2026-08-30 —
+     * replay-now fired, phone still hit "Request device information
+     * failure"). Only replays exceed 128; TUN_RAW chunks already fit. */
+    if (chunk > 128) chunk = 128;
     for (uint16_t off = 0; off < len; off += chunk) {
         uint16_t n = (len - off < chunk) ? (len - off) : chunk;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(data + off, n); /* NIMBLE-PASS */

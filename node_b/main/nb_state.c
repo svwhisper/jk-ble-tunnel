@@ -119,7 +119,13 @@ void nb_get_warm(uint8_t id, uint8_t rec, nb_cache_t *out)
 }
 
 void nb_mark_replay(uint8_t id, uint8_t bits)
-{ if (id >= CFG_NUM_UNITS) return; lock(); s_id[id].pending_replay |= bits; unlock(); }
+{
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    if (!s_id[id].pending_replay) s_id[id].pending_since_us = esp_timer_get_time();
+    s_id[id].pending_replay |= bits;
+    unlock();
+}
 
 uint8_t nb_take_replay(uint8_t id)
 {
@@ -140,6 +146,12 @@ bool nb_replay_ready(uint8_t id)
     lock();
     bool r = s_id[id].connected && s_id[id].notify_enabled &&
              s_id[id].pending_replay != 0;
+    /* Expire past the opener window: a replay held back by live traffic
+     * must never fire into a session that has long since moved on. */
+    if (r && esp_timer_get_time() - s_id[id].pending_since_us > 5000000LL) {
+        s_id[id].pending_replay = 0;
+        r = false;
+    }
     unlock();
     return r;
 }
@@ -161,6 +173,19 @@ bool nb_get_name(uint8_t id, char *out, size_t out_len)
     if (have) strlcpy(out, s_id[id].name, out_len);
     unlock();
     return have;
+}
+
+/* Plain volatile per-id timestamps: written by the single tunnel task,
+ * read by callbacks — a torn read costs at worst one deferred tick. */
+static volatile int64_t s_last_raw_us[CFG_NUM_UNITS];
+
+void nb_note_raw(uint8_t id)
+{ if (id < CFG_NUM_UNITS) s_last_raw_us[id] = esp_timer_get_time(); }
+
+bool nb_raw_quiet(uint8_t id, int64_t quiet_us)
+{
+    if (id >= CFG_NUM_UNITS) return true;
+    return esp_timer_get_time() - s_last_raw_us[id] > quiet_us;
 }
 
 void nb_set_conn(uint8_t id, bool c, uint16_t h)

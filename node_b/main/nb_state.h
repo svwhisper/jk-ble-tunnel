@@ -66,7 +66,11 @@ typedef struct {
      * app_probe 2026-08-30). Delivered by ble_periph_replay_tick() from the
      * tunnel task once notifications come up — NEVER from the subscribe
      * callback (that wedged the live stream, 2026-08-30). */
-    uint8_t    pending_replay; /* NB_REPLAY_* bits */
+    uint8_t    pending_replay;   /* NB_REPLAY_* bits */
+    int64_t    pending_since_us; /* set when bits first owed; replays expire
+                                  * after the app's opener window — a held
+                                  * replay must never inject a stale frame
+                                  * into a live session much later. */
 } nb_identity_t;
 
 typedef struct {
@@ -106,6 +110,12 @@ bool nb_notify_ready(uint8_t bms_id);     /* connected && notify_enabled */
 bool nb_replay_ready(uint8_t bms_id);     /* ...&& pending_replay != 0   */
 int  nb_conn_handle(uint8_t bms_id);      /* handle, or -1 if not connected */
 bool nb_get_name(uint8_t bms_id, char *out, size_t out_len); /* false if unset */
+
+/* Live-pipe tracker: replays must NEVER interleave with live TUN_RAW chunks
+ * (the app reassembles one contiguous stream; interleaving corrupted its
+ * devinfo — "device is not supported", 2026-08-30). */
+void nb_note_raw(uint8_t bms_id);                    /* a raw chunk was relayed */
+bool nb_raw_quiet(uint8_t bms_id, int64_t quiet_us); /* no raw for quiet_us?    */
 
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);
