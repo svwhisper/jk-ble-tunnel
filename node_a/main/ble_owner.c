@@ -56,8 +56,13 @@ static link_t s_links[CFG_LINK_POOL_SIZE];
 static SemaphoreHandle_t s_mtx_link_pool;
 
 /* One scan/connect in flight at a time (scanning is a global radio resource).
- * The arbiter serialises per-BMS work, so this is rarely contended. */
+ * The arbiter serialises per-BMS work, so this is rarely contended.
+ * s_connecting covers the SCAN phase only; once ble_gap_connect is issued the
+ * link moves to s_conn_inflight until its CONNECT event resolves. Keeping one
+ * flag for both phases let burst-duplicate DISC events free an in-flight link
+ * (multi-connect race — bank 0 held 4 phantom connections, 2026-08-30). */
 static link_t *s_connecting;
+static link_t *s_conn_inflight;
 static char    s_connect_name[32];
 static uint8_t s_connect_addr[6];
 static int gap_event(struct ble_gap_event *event, void *arg);
@@ -421,22 +426,36 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT: {
         link_t *l = arg;   /* link chosen in the connect call */
-        s_connecting = NULL;   /* scan/connect sequence resolved */
+        /* Only the connect we believe is in flight may be adopted; anything
+         * else is a stale completion whose slot was freed (and possibly
+         * reused) — adopting those is how phantom connections piled onto
+         * bank 0 and corrupted its state (2026-08-30). */
+        bool expected = (l == s_conn_inflight) && l->in_use && !l->conn_handle;
+        s_conn_inflight = NULL;
+        /* (s_connecting is NOT cleared here: it now belongs solely to the
+         * scan phase, which may already be running for a DIFFERENT bank.) */
         if (event->connect.status == 0) {
+            if (!expected) {
+                ESP_LOGW(TAG, "orphan connect handle=%u — terminating",
+                         event->connect.conn_handle);
+                ble_gap_terminate(event->connect.conn_handle,
+                                  BLE_ERR_REM_USER_CONN_TERM);          /* NIMBLE-PASS */
+                return 0;
+            }
             s_conn_events++;   /* the number that can't lie (each = one chirp) */
-            mqtt_publish_llevent("connect", l ? l->bms_id : 0xFF, 0);
+            mqtt_publish_llevent("connect", l->bms_id, 0);
             l->conn_handle = event->connect.conn_handle;
             /* Request larger MTU, then discover the JK service. */
             ble_gattc_exchange_mtu(l->conn_handle, NULL, NULL);        /* NIMBLE-PASS */
             ble_uuid16_t svc = BLE_UUID16_INIT(JK_SVC_UUID);
             ble_gattc_disc_svc_by_uuid(l->conn_handle, &svc.u, on_svc_disc, l); /* NIMBLE-PASS */
-        } else {
+        } else if (expected) {
             ESP_LOGW(TAG, "connect failed bms %u st=%d", l->bms_id, event->connect.status);
             set_link_state(l->bms_id, LINK_UNREACHABLE, false);
             if (l->txn_active) { l->txn_active = false;
                 respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
             l->in_use = false;
-        }
+        }   /* failed AND unexpected: nothing of ours to clean up */
         return 0;
     }
     case BLE_GAP_EVENT_DISCONNECT: {
@@ -544,6 +563,15 @@ static int scan_event(struct ble_gap_event *event, void *arg)
         ble_gap_disc_cancel();
         ble_addr_t addr = event->disc.addr;
         link_t *l = s_connecting;
+        /* Resolve the scan phase BEFORE connecting: DISC events arrive in
+         * bursts (no duplicate filtering — and unit 0's Telink advertises
+         * fast, even while connected). Leaving s_connecting set until the
+         * CONNECT event let a queued duplicate DISC re-enter here, fail
+         * ble_gap_connect (busy), and free the link while the first connect
+         * was still pending; the orphan then completed into a freed slot and
+         * every arbiter retry stacked another connection onto the module. */
+        s_connecting = NULL;
+        s_conn_inflight = l;
         /* Long-interval, long-supervision connection (see config.h rationale). */
         static const struct ble_gap_conn_params cp = {
             .scan_itvl = 0x0010, .scan_window = 0x0010,
@@ -554,7 +582,7 @@ static int scan_event(struct ble_gap_event *event, void *arg)
             .min_ce_len = 0, .max_ce_len = 0,
         };
         if (ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &addr, 5000, &cp, gap_event, l) != 0) {
-            s_connecting = NULL;
+            s_conn_inflight = NULL;
             l->txn_active = false;
             respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
             l->in_use = false;
@@ -579,11 +607,12 @@ static void start_connect(link_t *l)
 {
     const char *name = name_for(l->bms_id);
     const uint8_t *addr = addr_for(l->bms_id);
-    if (!name || !addr || !s_ble_enabled || s_connecting || s_scan_active ||
-        net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
-        /* No target, another connect in flight, a diagnostic scan owns the
-         * radio, or WiFi is re-associating (shared radio — scanning now would
-         * starve the 802.11 handshake). Fail the txn; the arbiter retries. */
+    if (!name || !addr || !s_ble_enabled || s_connecting || s_conn_inflight ||
+        s_scan_active || net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
+        /* No target, another scan/connect in flight, a diagnostic scan owns
+         * the radio, or WiFi is re-associating (shared radio — scanning now
+         * would starve the 802.11 handshake). Fail the txn; the arbiter
+         * retries. */
         l->txn_active = false;
         respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         l->in_use = false;
@@ -619,6 +648,11 @@ static void exec_request(const bms_request_t *req)
     if (req->kind == TXN_CONNECT) {
         if (l && l->conn_handle) {   /* already up */
             respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
+        } else if (l && (l == s_connecting || l == s_conn_inflight)) {
+            /* This bank is already mid scan/connect: don't stomp its txn or
+             * free its slot via start_connect's refuse path. Fail this
+             * request; the arbiter's retry lands after resolution. */
+            respond(req->bms_id, req->cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         } else {
             l = l ? l : link_alloc(req->bms_id);
             if (!l) { respond(req->bms_id, req->cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
@@ -800,6 +834,13 @@ static int scan_dump_event(struct ble_gap_event *event, void *arg)
 static void do_scan_dump(void)
 {
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    if (s_conn_inflight) {
+        /* A connect is pending in the controller — scanning would fail and
+         * cancelling isn't ours to do. Skip; the operator can re-request. */
+        ESP_LOGW(TAG, "scan dump: connect in flight — skipped");
+        xSemaphoreGive(s_mtx_link_pool);
+        return;
+    }
     if (s_connecting) {
         ble_gap_disc_cancel();
         link_t *l = s_connecting; s_connecting = NULL;
