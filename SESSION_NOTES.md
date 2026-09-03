@@ -2,6 +2,18 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-09-03: QUIET-IDLE MODEL LIVE (supersedes the 24x7-hold design)
+Owner found the garage beeping and direct connections blocked; A powered
+down. Root cause: the always-hold design (CONNECT DRIVER re-raising all
+four banks forever). New model: ZERO links at idle; demand-only raises
+(app attach via CLIENT(true), MQTT writes via dispatch); 60 s idle grace;
+boot-verify round once per boot (connect each bank -> confirm frames ->
+release -> publish jkbms/bridge/verify, non-retained; banks left
+advertising-eligible even on failure so app attach remains the recovery).
+NR "JK post-reboot verify" group consumes the topic -> failures to Logs.
+Deployed 2026-09-03: first round 4/4 ok in 63 s, then 120 s of total LL
+silence. Direct app connections at idle now possible (modules free).
+
 ## 2026-08-31: NIGHTLY REBOOT + POST-REBOOT CHECK LIVE; BANK-0 STALL IS SESSION-LINKED
 Nightly maintenance reboot deployed (A 01:00, B 01:05 local, DST-aware,
 unconditional, >2h-uptime guard; B gained SNTP). NR '.5 BMS tab' gained a
