@@ -95,6 +95,79 @@ static int64_t  s_linkup_us[CFG_NUM_UNITS];     /* when unit went LINK_UP     */
 static int64_t  s_hold_until_us[CFG_NUM_UNITS]; /* internal drivers idle till */
 static uint32_t s_hold_s[CFG_NUM_UNITS];        /* current ladder rung        */
 
+/* ---- boot-verify round (quiet-idle model, 2026-08-31) ------------------- */
+/* Once per boot: bring each bank up in turn, confirm it produces frames,
+ * then release it. Result JSON to jkbms/bridge/verify for the NR post-reboot
+ * check. This is the ONLY internally-initiated BLE contact at idle. */
+static int     s_vfy_bank = -1;        /* -1 idle/not started, 0..N running   */
+static bool    s_vfy_done;
+static int64_t s_vfy_start_us;
+static char    s_vfy_result[CFG_NUM_UNITS][16];
+
+static bool verify_wants(uint8_t id) { return !s_vfy_done && s_vfy_bank == (int)id; }
+
+static void verify_tick(int64_t now)
+{
+    if (s_vfy_done || !ble_owner_ble_enabled()) return;
+    if (s_vfy_bank < 0) {
+        if (!(xEventGroupGetBits(g_evt) & EVT_MQTT_UP) ||
+            now < 20000000LL) return;              /* let boot settle first */
+        s_vfy_bank = 0; s_vfy_start_us = now;
+        ESP_LOGI(TAG, "boot verify: starting round");
+    }
+    if (s_vfy_bank >= CFG_NUM_UNITS) {             /* publish + finish */
+        char j[192]; int o = snprintf(j, sizeof(j), "{\"up\":%lld,\"results\":{",
+                                      (long long)(now / 1000000));
+        for (uint8_t i = 0; i < CFG_NUM_UNITS; i++)
+            o += snprintf(j + o, sizeof(j) - o, "%s\"%u\":\"%s\"",
+                          i ? "," : "", i,
+                          s_vfy_result[i][0] ? s_vfy_result[i] : "skipped");
+        snprintf(j + o, sizeof(j) - o, "}}");
+        mqtt_publish_verify(j);
+        ESP_LOGI(TAG, "boot verify: %s", j);
+        /* Leave every configured bank advertising-eligible even if it failed
+         * verify: an app attach is the recovery path (demand raises the
+         * link), and a dark TUN would foreclose it for the whole day. */
+        for (uint8_t i = 0; i < CFG_NUM_UNITS; i++) {
+            if (cfg_name_for(i)[0] == '\0') continue;
+            bms_runtime_t r2; state_get_runtime(i, &r2);
+            if (r2.link == LINK_UNREACHABLE) {
+                r2.link = LINK_REACHABLE_IDLE; state_set_runtime(i, &r2);
+                tunnel_send_link(i, LINK_REACHABLE_IDLE);
+            }
+        }
+        s_vfy_done = true;
+        return;
+    }
+    uint8_t id = (uint8_t)s_vfy_bank;
+    bms_runtime_t rt; state_get_runtime(id, &rt);
+    if (cfg_name_for(id)[0] == '\0') {             /* parked bank */
+        strlcpy(s_vfy_result[id], "parked", sizeof(s_vfy_result[id]));
+    } else if (rt.last_seen_us > s_vfy_start_us) { /* frames since round start */
+        strlcpy(s_vfy_result[id], "ok", sizeof(s_vfy_result[id]));
+    } else if (now - s_vfy_start_us > 45000000LL) {
+        strlcpy(s_vfy_result[id],
+                rt.link_held ? "no_frames" : "no_connect",
+                sizeof(s_vfy_result[id]));
+    } else {
+        /* Drive the connect + bootstrap (5 s cadence; dispatch raises the
+         * link, link-up bootstrap elicits frames). */
+        static int64_t s_vfy_drive_us;
+        if (now - s_vfy_drive_us > 5000000LL) {
+            s_vfy_drive_us = now;
+            arbiter_poll(id, JK_CMD_DEVICE_INFO);
+        }
+        return;                                     /* still working this bank */
+    }
+    /* Bank concluded: release its link and move on. */
+    if (rt.link_held) {
+        bms_request_t d = { .bms_id = id, .kind = TXN_DISCONNECT,
+                            .source = SRC_INTERNAL };
+        arbiter_submit(&d);
+    }
+    s_vfy_bank++; s_vfy_start_us = now;
+}
+
 static void maintenance_tick(void)
 {
     int64_t now = esp_timer_get_time();
@@ -188,13 +261,14 @@ static void maintenance_tick(void)
             }
         }
 
-        /* CONNECT DRIVER: a unit that is enabled but not connected gets a
-         * pending poll every 20 s — dispatch sees the link down and runs the
-         * connect-on-demand path. Costs no beeps: arbiter_clear_pending at
-         * link-up flushes this pending before it can reach the BMS. (The old
-         * round-robin keep-alive doubled as this driver; when it was removed
-         * for beep silence, nothing initiated connections at all.) */
+        /* CONNECT DRIVER — QUIET-IDLE (2026-08-31): only DEMAND raises a
+         * link now. Demand = an app on this identity's clone, or the boot
+         * verify round. The old unconditional 20 s driver held all four
+         * banks 24x7 — reconnect churn beeped the garage, blocked direct
+         * app connections (a held module stops advertising) and was the
+         * CPUAux abuse profile. */
         if (!ble_quiesce && cfg_name_for(id)[0] != '\0' && !rt.link_held &&
+            (rt.app_connected || verify_wants(id)) &&
             now >= s_hold_until_us[id]) {
             static int64_t s_conn_drive_us[CFG_NUM_UNITS];
             if (now - s_conn_drive_us[id] > 20000000LL) {
@@ -235,17 +309,22 @@ static void maintenance_tick(void)
             now - s_linkup_us[id] > 4000000LL)
             decoder_send_opener(id);
 
-        /* Reachability-probe floor for unreachable units (spec §4). */
+        /* Reachability-probe floor — quiet-idle: only when demanded. */
         if (!ble_quiesce && cfg_name_for(id)[0] != '\0' &&
+            (rt.app_connected || verify_wants(id)) &&
             rt.link == LINK_UNREACHABLE && now >= s_hold_until_us[id] &&
             now - s_last_probe_us[id] > CFG_REACHABILITY_PROBE_S * 1000000LL) {
             s_last_probe_us[id] = now;
             arbiter_poll(id, JK_CMD_DEVICE_INFO);
         }
 
-        /* Idle-disconnect: app gone, nothing pending, held past the timeout. */
-        if (rt.link_held && !rt.app_connected && rt.app_left_us &&
-            now - rt.app_left_us > CFG_IDLE_DISCONNECT_MS * 1000LL) {
+        /* Idle-disconnect (quiet-idle): a held link with no app is dropped
+         * after the grace, whether an app ever attached (MQTT-write raises,
+         * verify leftovers) or just left. */
+        int64_t idle_ref = rt.app_left_us ? rt.app_left_us : s_linkup_us[id];
+        if (rt.link_held && !rt.app_connected && !verify_wants(id) &&
+            idle_ref &&
+            now - idle_ref > CFG_IDLE_DISCONNECT_MS * 1000LL) {
             bms_request_t d = { .bms_id = id, .kind = TXN_DISCONNECT,
                                 .source = SRC_INTERNAL };
             arbiter_submit(&d);
@@ -309,6 +388,7 @@ static void supervisor_task(void *arg)
         esp_task_wdt_reset();
         harvest_tick();      /* idempotent: skips units already in NVS */
         maintenance_tick();
+        verify_tick(esp_timer_get_time());
         { static int ka; if (++ka >= 15) { ka = 0;
               if (ble_owner_ble_enabled()) ble_owner_keepalive_read(); } }
         { static int hb; if (++hb >= 15) { hb = 0; mqtt_publish_health(); } }

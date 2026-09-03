@@ -74,6 +74,12 @@ void mqtt_publish_gatt(const char *json)   /* diagnostic, not retained */
     pub(CFG_MQTT_BASE "/bridge/gatt", json, 0);
 }
 
+void mqtt_publish_verify(const char *json)   /* boot-verify round result */
+{
+    pub(CFG_MQTT_BASE "/bridge/verify", json, 0);   /* NOT retained: a retained
+        replay would re-log the same failures on every NR redeploy */
+}
+
 void mqtt_publish_llevent(const char *kind, uint8_t bms_id, int reason)
 {
     char j[96];
