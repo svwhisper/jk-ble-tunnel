@@ -2,6 +2,26 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## BMS 0 REPLACEMENT INBOUND (owner, 2026-09-03; arrives ~w/c 2026-09-07)
+Unit 0 is hardware-confirmed bad (re-wedged even after power cycles); the
+deep investigation is MOOT. Swap checklist when the new unit lands:
+1. Get the new unit's BLE MAC + advertised name (bridge/cmd/scan, or
+   app/scan_probe). Update components/secret/secret.h FLEET_BMS_TABLE
+   bank-0 entry (MAC + name) on the Mac; rebuild + OTA node A.
+2. Clear A's harvest NVS so bank 0 re-harvests its GATT table:
+   jkbms/bridge/cmd/nvsclear (clears ALL banks + reboots — banks 1-3
+   re-harvest automatically on their next verify/app link-up).
+3. Node B: nothing required — devinfo cache self-replaces (richness
+   compare sees the new serial and persists), DIS_SERIAL[0] in
+   ble_periph.c is a display-only placeholder (update opportunistically
+   from the new unit's devinfo).
+4. The property-aware ATT write-op code handles either module type
+   (Telink-style inverted or C8-trio) automatically — no code change.
+5. After swap: run a verify round (reboot A or wait for 01:00), then the
+   wire-R recal (count 15 -> 5 s -> 16, balancer ON) for a fresh baseline
+   — ⚠️ ONLY with iBMS charge control disabled.
+6. iBMS/RS485 side of the swap is owner domain.
+
 ## 2026-09-03: QUIET-IDLE MODEL LIVE (supersedes the 24x7-hold design)
 Owner found the garage beeping and direct connections blocked; A powered
 down. Root cause: the always-hold design (CONNECT DRIVER re-raising all
