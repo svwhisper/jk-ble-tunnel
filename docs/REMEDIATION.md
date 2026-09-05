@@ -9,6 +9,11 @@ and an explicit acceptance decision before the next live deployment.
 
 Complexity/risk are implementation/change risk, not severity of the existing bug.
 High-risk rows are separate stages, never a single combined deployment.
+For categories with independent high-risk fixes, use separate sub-stages:
+5a discovery / 5b boot verification; 6a pending flush / 6b session fencing /
+6c redundant resync polling / 6d BLE-off cancellation; 8a publication isolation /
+8b broker-outage recovery policy; 10a notification delivery / 10b replay ordering.
+Do not combine these sub-stages in one live test merely because they share a row.
 
 | Stage | Category / audited issues | Complexity / risk | Acceptance gate |
 |---|---|---|---|
@@ -46,6 +51,10 @@ High-risk rows are separate stages, never a single combined deployment.
 - Flash only one node at a time. Keep the other on its accepted image until
   the first is checked. An accepted image may overwrite the automatic rollback
   slot on the next update: saved host binaries are the durable recovery path.
+- Backout was exercised successfully on B: Stage 2 → saved Stage 1 → Stage 2,
+  with exact ELF and VALID verified after each reboot. Owner requested no
+  repeated backout drills for subsequent deployments; preserve/checkpoint each
+  accepted image and use backout only when required.
 - If OTA is unavailable, stop and use owner-assisted USB application-only
   recovery with the saved matching binary and existing partition layout.
   Do not claim automatic rollback can repair every hang; it needs a reset.
@@ -78,7 +87,8 @@ High-risk rows are separate stages, never a single combined deployment.
 - Stage 2: local implementation/tests complete: 380 assertions plus 1,052,672
   exact-buffer validator calls under ASAN/UBSAN, existing 35 protocol checks,
   16 updater tests, and both firmware builds passed. Stage 1 saved images are
-  its backout point. Deployment and owner phone acceptance pending.
+  its backout point. B deployed and verified after the successful backout
+  drill; awaiting B phone check before A deployment. A remains Stage 1.
 - Stages 3–12: pending; acceptance gates deliberately prevent batch deployment.
 
 ## Stage 2 input contract
