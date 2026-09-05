@@ -99,8 +99,7 @@ static bool ring_pop(pend_t *p, bms_request_t *out)
 /* ---- runtime helpers ---------------------------------------------------- */
 static void rt_set_app(uint8_t id, bool app)
 {
-    bms_runtime_t rt; state_get_runtime(id, &rt);
-    rt.app_connected = app; state_set_runtime(id, &rt);
+    state_set_app_connected(id, app, esp_timer_get_time());
     if (app) xEventGroupSetBits(g_evt, EVT_APP_ACTIVE);
 }
 static bool rt_app_connected(uint8_t id)
@@ -370,8 +369,6 @@ static void on_app_conn(uint8_t id, bool connected)
          * (owned by supervisor) will drop the link. */
         p->link_wait_deadline_us = 0;
         arbiter_poll(id, JK_CMD_DEVICE_INFO); /* placeholder for settings re-read */
-        bms_runtime_t rt; state_get_runtime(id, &rt);
-        rt.app_left_us = esp_timer_get_time(); state_set_runtime(id, &rt);
     }
 }
 
@@ -398,9 +395,8 @@ static void check_link_guards(void)
              * timeout cascade). B's warm replay carries the current app
              * session; the supervisor's probes will demote a truly dead
              * unit on their own evidence. */
-            bms_runtime_t rt; state_get_runtime(id, &rt);
-            rt.link = LINK_REACHABLE_IDLE; state_set_runtime(id, &rt);
-            tunnel_send_link(id, LINK_REACHABLE_IDLE);
+            if (state_mark_idle_if_unheld(id))
+                tunnel_send_link(id, LINK_REACHABLE_IDLE);
         }
     }
 }

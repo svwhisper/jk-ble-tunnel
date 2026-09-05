@@ -21,5 +21,14 @@ cc "${flags[@]}" -I "$json_dir" -I node_a/main tools/host_test_inputs.c \
    node_a/main/command_validation.c "$json_dir/cJSON.c" \
    components/jk_proto/jk_proto.c test_board/main/synth_frames.c -o "$test_dir/inputs"
 "$test_dir/inputs"
+cc "${flags[@]}" -pthread -I tools/host_stubs -I node_a/main \
+   tools/host_test_state.c node_a/main/state_cache.c -o "$test_dir/state"
+"$test_dir/state"
+# ThreadSanitizer and ASAN cannot be combined: run the same concurrent tests
+# separately so incorrect locking cannot hide behind passing value assertions.
+cc -fsanitize=thread -g -Wall -Wextra -pthread -I tools/host_stubs \
+   -I components/common/include -I components/jk_proto/include -I node_a/main \
+   tools/host_test_state.c node_a/main/state_cache.c -o "$test_dir/state_tsan"
+"$test_dir/state_tsan"
 python3 -B -m unittest discover -s tools
 echo "Test executables preserved at $test_dir"

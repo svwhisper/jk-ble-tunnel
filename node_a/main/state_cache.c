@@ -35,10 +35,65 @@ void state_set_settings(uint8_t id, const jk_settings_t *s)
     unlock();
 }
 
-void state_set_runtime(uint8_t id, const bms_runtime_t *rt)
+void state_set_app_connected(uint8_t id, bool connected, int64_t now_us)
 {
     if (id >= CFG_NUM_UNITS) return;
-    lock(); s_state[id].rt = *rt; unlock();
+    lock();
+    s_state[id].rt.app_connected = connected;
+    s_state[id].rt.app_left_us = connected ? 0 : now_us;
+    unlock();
+}
+
+void state_set_link_state(uint8_t id, tunnel_link_state_t link, bool held,
+                          int64_t seen_us)
+{
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    bms_runtime_t *rt = &s_state[id].rt;
+    rt->link = link;
+    rt->link_held = held;
+    /* Preserve current link-up timestamp policy until verification stage 5b.
+     * A timestamp sampled before taking the mutex must not move time back. */
+    if (seen_us > rt->last_seen_us) rt->last_seen_us = seen_us;
+    unlock();
+}
+
+void state_note_frame(uint8_t id, int64_t seen_us)
+{
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    if (seen_us > s_state[id].rt.last_seen_us) s_state[id].rt.last_seen_us = seen_us;
+    unlock();
+}
+
+bool state_promote_unreachable(uint8_t id)
+{
+    if (id >= CFG_NUM_UNITS) return false;
+    lock();
+    bms_runtime_t *rt = &s_state[id].rt;
+    bool changed = !rt->link_held && rt->link == LINK_UNREACHABLE;
+    if (changed) rt->link = LINK_REACHABLE_IDLE;
+    unlock();
+    return changed;
+}
+
+bool state_mark_idle_if_unheld(uint8_t id)
+{
+    if (id >= CFG_NUM_UNITS) return false;
+    lock();
+    bool allowed = !s_state[id].rt.link_held;
+    if (allowed) s_state[id].rt.link = LINK_REACHABLE_IDLE;
+    unlock();
+    return allowed;
+}
+
+void state_clear_app_left_if(uint8_t id, int64_t expected_us)
+{
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    bms_runtime_t *rt = &s_state[id].rt;
+    if (!rt->app_connected && rt->app_left_us == expected_us) rt->app_left_us = 0;
+    unlock();
 }
 
 void state_get_runtime(uint8_t id, bms_runtime_t *out)

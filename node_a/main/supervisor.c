@@ -130,9 +130,7 @@ static void verify_tick(int64_t now)
          * link), and a dark TUN would foreclose it for the whole day. */
         for (uint8_t i = 0; i < CFG_NUM_UNITS; i++) {
             if (cfg_name_for(i)[0] == '\0') continue;
-            bms_runtime_t r2; state_get_runtime(i, &r2);
-            if (r2.link == LINK_UNREACHABLE) {
-                r2.link = LINK_REACHABLE_IDLE; state_set_runtime(i, &r2);
+            if (state_promote_unreachable(i)) {
                 tunnel_send_link(i, LINK_REACHABLE_IDLE);
             }
         }
@@ -328,7 +326,7 @@ static void maintenance_tick(void)
             bms_request_t d = { .bms_id = id, .kind = TXN_DISCONNECT,
                                 .source = SRC_INTERNAL };
             arbiter_submit(&d);
-            rt.app_left_us = 0; state_set_runtime(id, &rt);
+            state_clear_app_left_if(id, rt.app_left_us);
         }
 
         /* Publish link state (retained) on CHANGE plus a slow refresh — NOT

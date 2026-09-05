@@ -293,10 +293,7 @@ static void respond(uint8_t bms_id, uint16_t cmd_id, resp_status_t st,
 
 static void set_link_state(uint8_t id, tunnel_link_state_t s, bool held)
 {
-    bms_runtime_t rt; state_get_runtime(id, &rt);
-    rt.link = s; rt.link_held = held;
-    if (held) rt.last_seen_us = esp_timer_get_time();
-    state_set_runtime(id, &rt);
+    state_set_link_state(id, s, held, held ? esp_timer_get_time() : 0);
     if (id < CFG_NUM_UNITS) {
         if (held) xEventGroupSetBits(g_evt, EVT_BMS_UP(id));
         else      xEventGroupClearBits(g_evt, EVT_BMS_UP(id));
@@ -315,8 +312,7 @@ static void on_complete_frame(link_t *l, const uint8_t *frame, uint16_t flen)
     xQueueSend(g_q_notify, &it, 0);   /* queue overflow policy: separate stage */
     xQueueSend(g_q_decode, &it, 0);
 
-    bms_runtime_t rt; state_get_runtime(l->bms_id, &rt);
-    rt.last_seen_us = esp_timer_get_time(); state_set_runtime(l->bms_id, &rt);
+    state_note_frame(l->bms_id, esp_timer_get_time());
 
     /* Arbiter uses result metadata, never the frame pointer. Do not queue a
      * borrowed pointer which the next reassembly call can overwrite. */

@@ -112,7 +112,19 @@ Do not combine these sub-stages in one live test merely because they share a row
   B unchanged on accepted Stage 2.** Saved pair and
   A-only backout command are in
   `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage3-reassembly/MANIFEST.md`.
-- Stage 4: isolated runtime-state update correction in local review/testing.
+- Stage 4: local implementation replaces whole-runtime snapshot writeback with
+  field-specific locked operations, atomically pairs app state/departure time,
+  rejects stale timestamp cleanup and prevents reachability promotion from
+  overwriting a held link. Timestamps cannot move backwards under interleaving.
+  Old code's lost app_connected was reproduced deterministically. Production
+  state_cache.c passes deterministic checks and six threads × 25,000 iterations
+  using native mutex adapters under ASAN/UBSAN and separately ThreadSanitizer;
+  all prior tests pass. A firmware build passed with unchanged sdkconfig;
+  deployment and connect→idle live gate pending. Owner's 18:58 phone check
+  preceded Stage 4 deployment and confirms Stage 3 only.
+  This does NOT change the link-up-as-frame-evidence policy (5b) or fence an
+  already-queued idle disconnect against a new app session (6b). Those require
+  their own stages; a state-cache lock cannot make queue actions atomic.
 - Stages 5–12: pending; acceptance gates deliberately prevent batch deployment.
 
 ## Stage 2 input contract
