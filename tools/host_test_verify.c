@@ -10,6 +10,7 @@ static unsigned polls, releases, publications;
 static char published[192];
 static int64_t test_now;
 static uint8_t last_release_id;
+static bms_request_t last_release;
 int64_t esp_timer_get_time(void) { return test_now; }
 int64_t net_wifi_down_ms(void) { return 0; }
 bool net_wifi_up(void) { return true; }
@@ -26,8 +27,13 @@ EventBits_t xEventGroupGetBits(EventGroupHandle_t group)
 void arbiter_poll(uint8_t id, uint8_t opcode)
 { assert(id < CFG_NUM_UNITS && (opcode == JK_CMD_DEVICE_INFO || opcode == JK_CMD_CELL_INFO)); polls++; }
 void arbiter_submit(const bms_request_t *r)
-{ assert(r->kind == TXN_DISCONNECT && r->source == SRC_INTERNAL);
-  releases++; last_release_id = r->bms_id; }
+{
+    assert(r->kind == TXN_DISCONNECT && r->source == SRC_INTERNAL && r->idle_only);
+    bms_runtime_t rt; state_get_runtime(r->bms_id, &rt);
+    assert(rt.link_held && !rt.app_connected && r->idle_epoch == rt.idle_epoch);
+    last_release = *r;
+    releases++; last_release_id = r->bms_id;
+}
 void mqtt_publish_verify(const char *json)
 { publications++; strlcpy(published, json, sizeof(published)); }
 void tunnel_send_link(uint8_t id, tunnel_link_state_t link)
@@ -62,6 +68,8 @@ static void test_release_policy(void)
     assert(releases == 0);
     maintain_at(182000001);
     assert(releases == 1 && last_release_id == 0);
+    bms_runtime_t after; state_get_runtime(0, &after);
+    assert(after.app_left_us == 0 && after.idle_epoch == last_release.idle_epoch);
     state_set_link_state(0, LINK_REACHABLE_IDLE, false, 0);
     maintain_at(183000000); /* simulated GAP completion: no held-link leak */
     assert(releases == 1);
@@ -92,6 +100,31 @@ static void test_release_policy(void)
     assert(releases == 2);
     maintain_at(460000001);
     assert(releases == 3 && last_release_id == 2);
+    uint64_t queued_epoch = last_release.idle_epoch;
+    state_set_app_connected(2, true, 460000002);
+    state_get_runtime(2, &after);
+    assert(after.app_connected && after.idle_epoch != queued_epoch);
+    state_set_app_connected(2, false, 460000003);
+    state_get_runtime(2, &after);
+    assert(!after.app_connected && after.idle_epoch != queued_epoch);
+
+    /* Fast physical replacement is invisible to the tick's UP/DOWN edge
+     * detector. An old departure/tick time must not expire the new link. */
+    for (uint8_t id = 0; id < CFG_NUM_UNITS; id++)
+        state_set_link_state(id, LINK_REACHABLE_IDLE, false, 0);
+    state_set_link_state(3, LINK_UP, true, 500000000);
+    maintain_at(500000000);
+    state_set_app_connected(3, true, 501000000);
+    state_set_app_connected(3, false, 502000000);
+    state_set_link_state(3, LINK_REACHABLE_IDLE, false, 0);
+    state_set_link_state(3, LINK_UP, true, 550000000);
+    unsigned before = releases;
+    maintain_at(570000000);
+    assert(releases == before);
+    maintain_at(610000000);
+    assert(releases == before);
+    maintain_at(610000001);
+    assert(releases == before + 1 && last_release_id == 3);
 }
 
 int main(void)

@@ -867,6 +867,20 @@ static void exec_request(const bms_request_t *req)
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
     link_t *l = link_by_bms(req->bms_id);
 
+    /* This request may have waited in BOTH arbiter and BLE queues. Recheck
+     * the supervisor's snapshot here, not merely when it was enqueued.
+     * An app attach/departure or real-link replacement revokes its epoch.
+     * This is the authorization point; a later app transition cannot recall
+     * an operation already authorized/submitted to the asynchronous stack. */
+    if (req->idle_only) {
+        bms_runtime_t rt; state_get_runtime(req->bms_id, &rt);
+        if (req->kind != TXN_DISCONNECT || req->source != SRC_INTERNAL ||
+            !rt.link_held || rt.app_connected || rt.idle_epoch != req->idle_epoch) {
+            respond(req->bms_id, req->cmd_id, RESP_REJECTED, NULL, 0, JK_REC_NONE);
+            xSemaphoreGive(s_mtx_link_pool); return;
+        }
+    }
+
     if (req->kind == TXN_CONNECT) {
         if (l && (l->discovery_pending || l->discovery_failed)) {
             /* A physical connection is not a ready JK link. Keep the original

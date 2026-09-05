@@ -39,6 +39,7 @@ void state_set_app_connected(uint8_t id, bool connected, int64_t now_us)
 {
     if (id >= CFG_NUM_UNITS) return;
     lock();
+    if (s_state[id].rt.app_connected != connected) s_state[id].rt.idle_epoch++;
     s_state[id].rt.app_connected = connected;
     s_state[id].rt.app_left_us = connected ? 0 : now_us;
     unlock();
@@ -50,6 +51,10 @@ void state_set_link_state(uint8_t id, tunnel_link_state_t link, bool held,
     if (id >= CFG_NUM_UNITS) return;
     lock();
     bms_runtime_t *rt = &s_state[id].rt;
+    if (rt->link_held != held) {
+        rt->idle_epoch++;
+        if (held && seen_us > rt->link_up_us) rt->link_up_us = seen_us;
+    }
     rt->link = link;
     rt->link_held = held;
     /* Legacy activity drives reconnect/idle policies; do not change those

@@ -335,6 +335,51 @@ do not accidentally restore/bundle it into a Stage 5 deployment.
 
 ## Categories and order
 
+### Stage 6b split and isolated 6b1 candidate (2026-09-06)
+
+Owner requested proceeding after 6c acceptance. Red-team split: **6b1 idle
+disconnect fencing** first; **6b2 app-command/session fencing** later. Queue
+retention (6a) remains excluded and unsafe to deploy until the latter review.
+No stale app/MQTT command or result-correlation fix is claimed by 6b1.
+
+Local 6b1 gives each bank a RAM-only 64-bit idle epoch, updated under the
+existing state mutex on actual app and held-link edges. The supervisor tags
+idle requests with its snapshot epoch; all queue copies preserve it. The BLE
+owner rechecks epoch, held/no-app state, kind and source immediately before
+authorizing execution. Stale requests return RESP_REJECTED to release arbiter
+busy bookkeeping without sending LINK_DOWN to a later phone session. Explicit
+bounces remain unfenced and unchanged; they are not used in live tests.
+
+Generation checking alone was insufficient for a fast real-link replacement:
+both edges can occur between supervisor ticks, leaving its old link-up timer.
+The state cache now records the actual ready-edge timestamp; idle grace uses
+the later of it and app departure. Thus an old departure/tick cannot immediately
+expire a newly ready link. The strict >60 s boundary, demand-only policy and
+once-per-boot verification remain. New fields are internal A structs only;
+queue creation uses sizeof, request constructors initialize the new flag, and
+no TCP/MQTT/NVS layout or B firmware changes are required.
+
+Safety boundary: the final state check is the authorization point. It cannot
+retract an already-authorized/asynchronous BLE operation; the app state is what
+A's arbiter has processed, not proof of instantaneous phone-side state. Lost/
+delayed CLIENT messages, active teardown versus a later attach, queued writes,
+MQTT ownership and stale response correlation remain separate review items.
+The new path retains existing link-pool -> state-mutex lock order and does not
+hold the state mutex across NimBLE calls, avoiding a new lock inversion or
+long critical section. This is not a complete session-safety claim.
+
+Old actual BLE handler reproduced stale idle termination after app acquisition.
+Final full host suite passes: 2,402 final-handler stale/app/link/source/kind/
+64-bit epoch cases under both sanitizer builds; actual arbiter queue metadata
+preservation/rejection handling; 16,025 app-transition cases; actual supervisor
+snapshot/cleanup, ABA and between-tick replacement/deadline tests; six-thread
+state stress with exact epoch accounting and TSan, plus all prior protocol,
+discovery and 16 updater tests. Final executables:
+`/private/tmp/jk-host-tests.W3FLsg`. A build passed with unchanged sdkconfig,
+1,212,192 bytes. Candidate source is committed separately with saved image/hash
+and accepted 6c backout. Live acceptance pending; no live fault injection or
+battery-setting changes. The inherited intermittent display issue stays open.
+
 ### Checkpoint decision — 2026-09-06 09:21
 
 Owner delegated the baseline decision after requesting continued remediation.

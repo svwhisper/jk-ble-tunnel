@@ -27,6 +27,7 @@ static uint16_t dsc_start, dsc_end, written_handle, optional_written_handle;
 static unsigned dsc_calls;
 static unsigned frame_notes, frame_copies;
 static int64_t frame_time;
+static bms_runtime_t test_runtime[CFG_NUM_UNITS];
 static int dsc_rc, optional_dsc_rc;
 static const struct ble_gatt_error ok = {0}, done = { .status = BLE_HS_EDONE },
                                    error = { .status = 5 };
@@ -51,7 +52,7 @@ void state_set_link_state(uint8_t id, tunnel_link_state_t st, bool held, int64_t
 void state_note_frame(uint8_t id, int64_t now)
 { assert(id == 1); frame_notes++; frame_time = now; }
 void state_get_runtime(uint8_t id, bms_runtime_t *out)
-{ assert(id < CFG_NUM_UNITS); memset(out, 0, sizeof(*out)); }
+{ assert(id < CFG_NUM_UNITS); *out = test_runtime[id]; }
 int ble_gattc_exchange_mtu(uint16_t ch, ble_gatt_mtu_fn *cb, void *arg)
 { (void)ch; assert(!cb && !arg); return mtu_rc; }
 int ble_gattc_disc_svc_by_uuid(uint16_t ch, const ble_uuid_t *uuid, ble_gatt_disc_svc_fn *cb, void *arg)
@@ -174,9 +175,65 @@ static void ack(link_t *l)
 }
 static void *timeout_worker(void *arg)
 { (void)arg; sweep_timeouts(); return NULL; }
+static int test_idle_fence(void)
+{
+    link_t *l = setup(7);
+    l->table_ready = true; l->val_handle = 10; l->txn_active = false;
+    test_runtime[1] = (bms_runtime_t){ .app_connected = true, .link_held = true,
+                                     .link = LINK_UP, .idle_epoch = 8 };
+    /* Request waited in either queue while the phone acquired this bank. */
+    bms_request_t r = { .bms_id = 1, .cmd_id = 77, .kind = TXN_DISCONNECT,
+                       .source = SRC_INTERNAL, .idle_only = true, .idle_epoch = 7 };
+    exec_request(&r);
+    if (terminate_calls || responses != 1 || last_response.status != RESP_REJECTED) {
+        fprintf(stderr, "FAIL: stale idle release terminated=%u responses=%u status=%d\n",
+                terminate_calls, responses, last_response.status);
+        return 1;
+    }
+    unsigned cases = 1;
+    const uint64_t epochs[] = {0, 1, UINT32_MAX, (uint64_t)UINT32_MAX + 1, UINT64_MAX};
+    for (uint8_t id = 0; id < CFG_NUM_UNITS; id++)
+    for (unsigned held = 0; held < 2; held++)
+    for (unsigned app = 0; app < 2; app++)
+    for (unsigned source = SRC_APP; source <= SRC_INTERNAL; source++)
+    for (unsigned kind = TXN_POLL; kind <= TXN_DISCONNECT; kind++)
+    for (unsigned e = 0; e < sizeof(epochs) / sizeof(epochs[0]); e++)
+    for (unsigned match = 0; match < 2; match++) {
+        l = setup(7); l->bms_id = id;
+        l->table_ready = true; l->val_handle = 10; l->txn_active = false;
+        test_runtime[id] = (bms_runtime_t){ .app_connected = app, .link_held = held,
+                                          .link = held ? LINK_UP : LINK_REACHABLE_IDLE,
+                                          .idle_epoch = epochs[e] };
+        r = (bms_request_t){ .bms_id = id, .cmd_id = 77, .kind = kind,
+                            .source = source, .idle_only = true,
+                            .idle_epoch = match ? epochs[e] : epochs[e] ^ 1u };
+        link_t before = *l;
+        exec_request(&r);
+        bool allowed = held && !app && source == SRC_INTERNAL &&
+                       kind == TXN_DISCONNECT && match;
+        assert(responses == 1 && last_response.bms_id == id && last_response.cmd_id == 77);
+        assert(last_response.status == (allowed ? RESP_OK : RESP_REJECTED));
+        assert(terminate_calls == (unsigned)allowed && write_calls == 0);
+        assert(memcmp(l, &before, sizeof(before)) == 0);
+        cases++;
+    }
+    /* Explicit bounces are NOT idle releases: leave their policy unchanged. */
+    l = setup(7); l->table_ready = true; l->val_handle = 10; l->txn_active = false;
+    test_runtime[1] = (bms_runtime_t){ .app_connected = true, .idle_epoch = 99 };
+    r = (bms_request_t){ .bms_id = 1, .cmd_id = 78, .kind = TXN_DISCONNECT,
+                        .source = SRC_INTERNAL };
+    exec_request(&r);
+    assert(terminate_calls == 1 && responses == 1 && last_response.status == RESP_OK);
+    cases++;
+    memset(test_runtime, 0, sizeof(test_runtime));
+    printf("PASS: final BLE idle fence, %u stale/app/link/type/source/64-bit epoch cases\n", cases);
+    return 0;
+}
+
 int main(void)
 {
     s_mtx_link_pool = xSemaphoreCreateMutex();
+    if (test_idle_fence()) return 1;
     /* Immediate start failure, errors, missing service/characteristic. */
     link_t *l = setup(7); svc_rc = 6; start(l); failed(l, RESP_GATT_ERR);
     l = setup(7); start(l); svc_cb(7, &error, NULL, svc_arg); failed(l, RESP_GATT_ERR);

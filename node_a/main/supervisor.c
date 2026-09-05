@@ -320,12 +320,16 @@ static void maintenance_tick(void)
         /* Idle-disconnect (quiet-idle): a held link with no app is dropped
          * after the grace, whether an app ever attached (MQTT-write raises,
          * verify leftovers) or just left. */
-        int64_t idle_ref = rt.app_left_us ? rt.app_left_us : s_linkup_us[id];
+        /* A link can drop/reconnect between supervisor ticks. Its actual
+         * ready-edge timestamp must supersede an older app departure or
+         * tick-observed link-up, or a fresh epoch could still expire early. */
+        int64_t idle_ref = rt.app_left_us > rt.link_up_us ? rt.app_left_us : rt.link_up_us;
         if (rt.link_held && !rt.app_connected && !verify_wants(id) &&
             idle_ref &&
             now - idle_ref > CFG_IDLE_DISCONNECT_MS * 1000LL) {
             bms_request_t d = { .bms_id = id, .kind = TXN_DISCONNECT,
-                                .source = SRC_INTERNAL };
+                                .source = SRC_INTERNAL, .idle_only = true,
+                                .idle_epoch = rt.idle_epoch };
             arbiter_submit(&d);
             state_clear_app_left_if(id, rt.app_left_us);
         }

@@ -12,6 +12,8 @@ EventGroupHandle_t g_evt;
 static jmp_buf loop_done;
 static arb_msg_t incoming, emitted;
 static unsigned selections, sends, active_signals;
+static unsigned ble_queue_sends;
+static bms_request_t ble_queued;
 static int64_t test_now = 1000000;
 
 int64_t esp_timer_get_time(void) { return test_now; }
@@ -31,6 +33,12 @@ BaseType_t xQueueReceive(QueueHandle_t q, void *out, TickType_t t)
 { assert(q == g_q_arb_in && t == 0); memcpy(out, &incoming, sizeof(incoming)); return pdTRUE; }
 BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t t)
 {
+    if (q == g_q_bms_request) {
+        assert(t == pdMS_TO_TICKS(20));
+        ble_queued = *(const bms_request_t *)item;
+        ble_queue_sends++;
+        return pdTRUE;
+    }
     assert(q == g_q_arb_in && t == pdMS_TO_TICKS(20));
     emitted = *(const arb_msg_t *)item;
     sends++;
@@ -55,13 +63,17 @@ void measure_start(uint8_t id, const char *cid)
 static bms_runtime_t runtime(uint8_t id)
 { bms_runtime_t rt; state_get_runtime(id, &rt); return rt; }
 
-static void client_message(uint8_t id, bool connected)
+static void message_once(void)
 {
-    incoming = (arb_msg_t){ .kind = ARB_APP_CONN, .bms_id = id, .connected = connected };
     selections = sends = 0;
     memset(&emitted, 0, sizeof(emitted));
     if (setjmp(loop_done) == 0) arbiter_task(NULL);
     assert(selections == 2);
+}
+static void client_message(uint8_t id, bool connected)
+{
+    incoming = (arb_msg_t){ .kind = ARB_APP_CONN, .bms_id = id, .connected = connected };
+    message_once();
 }
 
 int main(void)
@@ -101,6 +113,7 @@ int main(void)
             assert(!runtime(id).app_connected && runtime(id).app_left_us == test_now);
             assert(s_pend[id].link_wait_deadline_us == 0);
             int64_t departure = test_now;
+            uint64_t departure_epoch = runtime(id).idle_epoch;
             cases++;
 
             bms_runtime_t other[CFG_NUM_UNITS];
@@ -113,6 +126,7 @@ int main(void)
                     assert(sends == 0 && !runtime(id).app_connected);
                     assert(runtime(id).app_left_us == (cleared ? 0 : departure));
                     assert(runtime(id).link_held == (bool)held);
+                    assert(runtime(id).idle_epoch == departure_epoch);
                     for (unsigned k = 0; k < CFG_NUM_UNITS; k++) {
                         if (k == id) continue;
                         bms_runtime_t rt = runtime(k);
@@ -123,6 +137,31 @@ int main(void)
             }
         }
     }
+    assert(ble_queue_sends == 0);
+    /* Fence metadata must survive actual ARB_REQ -> pending ring -> BLE
+     * queue without being refreshed to a newer app/link generation. */
+    memset(s_pend, 0, sizeof(s_pend));
+    state_set_link_state(1, LINK_UP, true, test_now);
+    bms_request_t idle = { .bms_id = 1, .kind = TXN_DISCONNECT,
+                          .source = SRC_INTERNAL, .idle_only = true,
+                          .idle_epoch = UINT64_C(0x100000123) };
+    s_pend[1].busy = true;
+    incoming = (arb_msg_t){ .kind = ARB_REQ, .bms_id = 1, .req = idle };
+    message_once();
+    assert(s_pend[1].count == 1 && ble_queue_sends == 0);
+    state_set_app_connected(1, true, ++test_now);
+    state_set_app_connected(1, false, ++test_now);
+    s_pend[1].busy = false;
+    dispatch(1);
+    assert(ble_queue_sends == 1 && s_pend[1].busy && s_pend[1].count == 0);
+    assert(ble_queued.idle_only && ble_queued.idle_epoch == idle.idle_epoch);
+    assert(ble_queued.kind == TXN_DISCONNECT && ble_queued.source == SRC_INTERNAL);
+    bms_response_t rejected = { .bms_id = 1, .cmd_id = ble_queued.cmd_id, .status = RESP_REJECTED };
+    on_response(&rejected);
+    assert(!s_pend[1].busy && s_pend[1].backoff_ms == 0 && ble_queue_sends == 1);
+    /* tunnel_send_write_result is trapped: a rejected old idle request
+     * cannot send LINK_DOWN to a later phone connection. */
     printf("PASS: production app handler/state cache, %u attach/departure/resync cases\n", cases);
+    puts("PASS: idle fence survives arbiter pending/dispatch queues; rejection frees busy without link-down");
     return 0;
 }

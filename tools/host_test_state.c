@@ -80,12 +80,15 @@ static void *decoder_writer(void *arg)
 static void *observer(void *arg)
 {
     (void)arg;
+    uint64_t previous_epoch = 0;
     for (int i = 1; i <= ITERATIONS; i++) {
         bms_state_t st;
         assert(state_snapshot(0, &st));
         assert(!st.rt.app_connected || st.rt.app_left_us == 0);
         assert(!st.rt.link_held || st.rt.link == LINK_UP);
         assert(st.rt.last_frame_us <= st.rt.last_seen_us);
+        assert(st.rt.idle_epoch >= previous_epoch);
+        previous_epoch = st.rt.idle_epoch;
         if (st.have_cells) assert(st.cells.cells[0].mv == st.cells.pack_mv);
         if (st.have_settings)
             assert(st.settings.cell_count_set == st.settings.balance_current_a);
@@ -96,6 +99,32 @@ static void *observer(void *arg)
 int main(void)
 {
     state_cache_init();
+
+    /* Epoch tracks actual ownership/link edges, not traffic or resync. A
+     * connect->disconnect ABA must still revoke an old idle request. */
+    assert(get(2).idle_epoch == 0);
+    state_set_app_connected(2, false, 1);
+    assert(get(2).idle_epoch == 0);
+    state_set_link_state(2, LINK_UP, true, 2);
+    assert(get(2).idle_epoch == 1);
+    assert(get(2).link_up_us == 2);
+    state_set_link_state(2, LINK_UP, true, 3);
+    state_note_frame(2, 4);
+    assert(get(2).idle_epoch == 1);
+    assert(get(2).link_up_us == 2); /* repeated UP and frames do not move it */
+    state_set_app_connected(2, true, 5);
+    assert(get(2).idle_epoch == 2);
+    state_set_app_connected(2, true, 6);
+    assert(get(2).idle_epoch == 2);
+    state_set_app_connected(2, false, 7);
+    assert(get(2).idle_epoch == 3);
+    state_clear_app_left_if(2, 7);
+    assert(get(2).idle_epoch == 3);
+    state_set_link_state(2, LINK_REACHABLE_IDLE, false, 0);
+    state_set_link_state(2, LINK_UP, true, 8);
+    assert(get(2).idle_epoch == 5);
+    assert(get(2).link_up_us == 8);
+    assert(get(1).idle_epoch == 0); /* other bank cannot revoke this one */
 
     /* Exact old failure: an unrelated notify update erased app_connected. */
     state_set_app_connected(0, true, 1);
@@ -141,6 +170,7 @@ int main(void)
     assert(get(255).last_frame_us == 0);
 
     state_note_frame(0, 1000000);
+    uint64_t before_epoch = get(0).idle_epoch;
     pthread_t threads[6];
     void *(*workers[])(void *) = {
         app_writer, link_writer, frame_writer, reachability_writer,
@@ -153,6 +183,7 @@ int main(void)
     assert(get(0).last_frame_us == 1000000 + ITERATIONS);
     assert(get(0).app_left_us == 2 * ITERATIONS + 1 && !get(0).app_connected);
     assert(get(3).last_seen_us == 999);
+    assert(get(0).idle_epoch == before_epoch + 4 * ITERATIONS);
     printf("PASS: production state cache, deterministic races + 6 threads x %d iterations\n",
            ITERATIONS);
     return 0;

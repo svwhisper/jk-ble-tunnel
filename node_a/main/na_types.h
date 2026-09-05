@@ -43,6 +43,10 @@ typedef struct {
     uint32_t     timeout_ms;
     uint8_t      payload[REQ_PAYLOAD_MAX];
     uint8_t      payload_len;
+    /* Internal idle-release fence; never serialized onto TCP/MQTT/NVS.
+     * Explicit bounces leave idle_only=false and retain their own policy. */
+    bool         idle_only;
+    uint64_t     idle_epoch;
 } bms_request_t;
 
 /* Result status carried on q_bms_response. */
@@ -72,6 +76,8 @@ typedef struct {
     int64_t  last_frame_us;          /* complete checksum-valid frame ONLY   */
     int64_t  app_left_us;            /* for idle-disconnect timer            */
     bool     meas_in_progress;
+    uint64_t idle_epoch;             /* changes on app or held-link edges   */
+    int64_t  link_up_us;             /* actual ready-link edge, not a tick  */
 } bms_runtime_t;
 
 /* Fan-out notification item (ble_owner -> tunnel_srv and -> decoder).
