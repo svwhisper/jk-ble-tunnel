@@ -50,8 +50,9 @@ typedef enum {
     RESP_OK, RESP_TIMEOUT, RESP_LINK_DOWN, RESP_GATT_ERR, RESP_REJECTED,
 } resp_status_t;
 
-/* q_bms_response item (ble_owner -> arbiter). frame is owned by ble_owner and
- * valid only until the arbiter releases it (copy what you keep). */
+/* q_bms_response item (ble_owner -> arbiter). The legacy frame fields are
+ * currently NULL/0: decoded data travels through copied notification queues,
+ * never as a borrowed pointer into the mutable reassembly buffer. */
 typedef struct {
     uint8_t       bms_id;
     uint16_t      cmd_id;

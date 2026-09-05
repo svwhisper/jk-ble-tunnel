@@ -4,7 +4,7 @@
  * part that is fully testable off-hardware, so it has a real test.
  *
  * Build & run on a Mac:
- *   cc -I components/common/include -I components/jk_proto/include \
+ *   cc -DJK_ENABLE_WRITES=1 -I components/common/include -I components/jk_proto/include \
  *      -I test_board/main tools/host_test_jk_proto.c \
  *      components/jk_proto/jk_proto.c test_board/main/synth_frames.c \
  *      -o /tmp/jkt && /tmp/jkt
@@ -34,8 +34,9 @@ int main(void)
     const uint8_t *got = NULL; uint16_t got_len = 0;
     for (int off = 0; off < flen; off += 17) {
         int n = (flen - off < 17) ? (flen - off) : 17;
-        uint16_t out_len;
-        const uint8_t *f = jk_reasm_push(&r, frame + off, n, &out_len);
+        uint16_t out_len; size_t consumed;
+        const uint8_t *f = jk_reasm_push(&r, frame + off, n, &out_len, &consumed);
+        assert(consumed == (size_t)n);  /* these chunks end at this frame's end */
         if (f) { got = f; got_len = out_len; }
     }
     CHECK(got != NULL && got_len == 300, "reassembly across 17-byte chunks");
@@ -43,12 +44,15 @@ int main(void)
     /* 3. Prepend garbage so the magic-hunt/resync path is exercised. */
     jk_reasm_init(&r, JK_FRAME_JK02_32S);
     uint8_t junk[5] = {0x00, 0x11, 0x55, 0x22, 0x33};
-    jk_reasm_push(&r, junk, sizeof(junk), NULL);
+    size_t junk_consumed;
+    jk_reasm_push(&r, junk, sizeof(junk), NULL, &junk_consumed);
+    assert(junk_consumed == sizeof(junk));
     got = NULL;
     for (int off = 0; off < flen; off += 40) {
         int n = (flen - off < 40) ? (flen - off) : 40;
-        uint16_t out_len;
-        const uint8_t *f = jk_reasm_push(&r, frame + off, n, &out_len);
+        uint16_t out_len; size_t consumed;
+        const uint8_t *f = jk_reasm_push(&r, frame + off, n, &out_len, &consumed);
+        assert(consumed == (size_t)n);
         if (f) { got = f; got_len = out_len; }
     }
     CHECK(got != NULL && got_len == 300, "resync after leading garbage");

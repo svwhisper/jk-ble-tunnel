@@ -92,8 +92,8 @@ typedef struct {
 /* ---- Reassembly --------------------------------------------------------- */
 /*
  * Notifications arrive as chunks (spec §8: frames span multiple notifications).
- * Feed every inbound chunk to jk_reasm_push; it returns a pointer to a complete,
- * checksum-valid frame exactly once per frame, else NULL.
+ * Feed every inbound chunk to jk_reasm_push, repeating for any unconsumed
+ * suffix. It returns one checksum-valid frame at a time, else NULL.
  */
 typedef struct {
     uint8_t  buf[JK_FRAME_MAX];
@@ -107,10 +107,15 @@ void jk_reasm_reset(jk_reasm_t *r);
 
 /*
  * Returns a completed frame (r->buf, length in *out_len) or NULL if more data
- * is needed. On return of a frame, the reassembler auto-resets for the next.
+ * is needed. *consumed (required) reports how many input bytes were used; the
+ * caller MUST process the remaining suffix, even after a completed frame.
+ * With nonempty input this always consumes at least one byte; NULL consumes
+ * all input and sets *out_len to zero. Empty input consumes zero bytes.
+ * The returned frame is valid only until the next push/reset. Copy/process
+ * it before feeding the suffix. No additional allocation or buffering.
  */
 const uint8_t *jk_reasm_push(jk_reasm_t *r, const uint8_t *data, size_t len,
-                             uint16_t *out_len);
+                             uint16_t *out_len, size_t *consumed);
 
 /* ---- Frame identification + decode -------------------------------------- */
 

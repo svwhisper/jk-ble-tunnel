@@ -91,10 +91,20 @@ Do not combine these sub-stages in one live test merely because they share a row
   drill; owner confirmed B phone test passed. A then deployed to ota_1
   (HTTP 200, 1,208,816 bytes in 21.48 s); exact ELF
   `7663cb35b61980a46b4aac3b91fdd42325d3aac2cb840df985dff4e11ecde248`
-  and OTA VALID confirmed at uptime 6122 ms. **Both nodes now run Stage 2;
-  awaiting owner read-only phone check after A's reboot before accepting the
-  complete stage.** No Stage 3+ firmware changes have been made or deployed.
-- Stages 3–12: pending; acceptance gates deliberately prevent batch deployment.
+  and OTA VALID confirmed at uptime 6122 ms. Owner confirmed post-A read-only
+  phone test passed: **Stage 2 accepted on both nodes.** Its saved images are
+  the recovery point for Stage 3.
+- Stage 3: isolated reassembly fix passed local tests. Regression reproduced on
+  Stage 2 code (continuous 128-byte input loses the middle record). The API now
+  reports consumed bytes; A drains each chunk fully and copies completed frames
+  before continuing. Raw forwarding, queues, connection timing and wire layout
+  unchanged. B does not call this API and will remain on its accepted Stage 2
+  image; both targets are built to check shared-component compatibility.
+  Both firmware builds passed with unchanged sdkconfigs. 71,769 byte-exact
+  reassembly assertions passed under ASAN/UBSAN (all fixed chunk sizes and
+  two-chunk splits, noise, checksum failure, retained partial magic, reset),
+  alongside all Stage 2 tests. Node A deployment and live acceptance pending.
+- Stages 4–12: pending; acceptance gates deliberately prevent batch deployment.
 
 ## Stage 2 input contract
 

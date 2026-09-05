@@ -90,8 +90,10 @@ static bool starts_with_magic(const uint8_t *p, uint16_t n)
 }
 
 const uint8_t *jk_reasm_push(jk_reasm_t *r, const uint8_t *data, size_t len,
-                             uint16_t *out_len)
+                             uint16_t *out_len, size_t *consumed)
 {
+    *consumed = 0;
+    if (out_len) *out_len = 0;
     for (size_t i = 0; i < len; i++) {
         uint8_t b = data[i];
 
@@ -117,12 +119,14 @@ const uint8_t *jk_reasm_push(jk_reasm_t *r, const uint8_t *data, size_t len,
             uint16_t flen = r->want;
             jk_reasm_reset(r);
             if (flen <= JK_FRAME_MAX && jk_checksum_ok(r->buf, flen)) {
+                *consumed = i + 1;
                 if (out_len) *out_len = flen;
                 return r->buf;
             }
             /* Bad checksum: drop and keep scanning subsequent bytes. */
         }
     }
+    *consumed = len;
     return NULL;
 }
 

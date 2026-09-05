@@ -304,6 +304,29 @@ static void set_link_state(uint8_t id, tunnel_link_state_t s, bool held)
 }
 
 /* ---- notify path (host task) ------------------------------------------- */
+static void on_complete_frame(link_t *l, const uint8_t *frame, uint16_t flen)
+{
+    l->timeout_strikes = 0;   /* the unit is talking — clear the §11 strikes */
+
+    /* Copy before reassembly resumes: its buffer is reused for the suffix. */
+    notify_item_t it;
+    it.bms_id = l->bms_id; it.idx = 0; it.raw = false; it.len = flen;
+    memcpy(it.data, frame, flen);
+    xQueueSend(g_q_notify, &it, 0);   /* queue overflow policy: separate stage */
+    xQueueSend(g_q_decode, &it, 0);
+
+    bms_runtime_t rt; state_get_runtime(l->bms_id, &rt);
+    rt.last_seen_us = esp_timer_get_time(); state_set_runtime(l->bms_id, &rt);
+
+    /* Arbiter uses result metadata, never the frame pointer. Do not queue a
+     * borrowed pointer which the next reassembly call can overwrite. */
+    if (l->txn_active && l->txn.kind == TXN_POLL) {
+        jk_record_t rec = jk_frame_record(frame, flen);
+        l->txn_active = false;
+        respond(l->bms_id, l->txn.cmd_id, RESP_OK, NULL, 0, rec);
+    }
+}
+
 static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
 {
     /* Raw capture (O-1): dump the chunk as received, before reassembly — so we
@@ -323,27 +346,14 @@ static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
         xQueueSend(g_q_notify, &rw, 0);
     }
 
-    uint16_t flen;
-    const uint8_t *frame = jk_reasm_push(&l->reasm, data, len, &flen);
-    if (!frame) return;   /* need more chunks */
-
-    l->timeout_strikes = 0;   /* the unit is talking — clear the §11 strikes */
-
-    /* Fan out the complete frame: to Node B's read cache and to the decoder. */
-    notify_item_t it;
-    it.bms_id = l->bms_id; it.idx = 0; it.raw = false; it.len = flen;
-    memcpy(it.data, frame, flen);
-    xQueueSend(g_q_notify, &it, 0);   /* drop-oldest semantics if full */
-    xQueueSend(g_q_decode, &it, 0);
-
-    bms_runtime_t rt; state_get_runtime(l->bms_id, &rt);
-    rt.last_seen_us = esp_timer_get_time(); state_set_runtime(l->bms_id, &rt);
-
-    /* Complete an outstanding POLL if this is the record it wanted. */
-    if (l->txn_active && l->txn.kind == TXN_POLL) {
-        jk_record_t rec = jk_frame_record(frame, flen);
-        l->txn_active = false;
-        respond(l->bms_id, l->txn.cmd_id, RESP_OK, frame, flen, rec);
+    size_t off = 0;
+    while (off < len) {
+        uint16_t flen;
+        size_t consumed;
+        const uint8_t *frame = jk_reasm_push(&l->reasm, data + off, len - off,
+                                            &flen, &consumed);
+        off += consumed;
+        if (frame) on_complete_frame(l, frame, flen);
     }
 }
 

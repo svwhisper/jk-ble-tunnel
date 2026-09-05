@@ -14,6 +14,9 @@ flags=(-DJK_ENABLE_WRITES=1 -fsanitize=address,undefined -g -Wall -Wextra
 cc "${flags[@]}" tools/host_test_jk_proto.c components/jk_proto/jk_proto.c \
    test_board/main/synth_frames.c -o "$test_dir/proto"
 "$test_dir/proto"
+cc "${flags[@]}" tools/host_test_reasm.c components/jk_proto/jk_proto.c \
+   test_board/main/synth_frames.c -o "$test_dir/reasm"
+"$test_dir/reasm"
 cc "${flags[@]}" -I "$json_dir" -I node_a/main tools/host_test_inputs.c \
    node_a/main/command_validation.c "$json_dir/cJSON.c" \
    components/jk_proto/jk_proto.c test_board/main/synth_frames.c -o "$test_dir/inputs"
