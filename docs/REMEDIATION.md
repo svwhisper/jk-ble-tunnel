@@ -135,7 +135,7 @@ Do not combine these sub-stages in one live test merely because they share a row
   This does NOT change the link-up-as-frame-evidence policy (5b) or fence an
   already-queued idle disconnect against a new app session (6b). Those require
   their own stages; a state-cache lock cannot make queue actions atomic.
-- Stages 5–12: pending; acceptance gates deliberately prevent batch deployment.
+- Stage 5: deferred at owner's request (bench unavailable); no deployment.
   Stage 5a review confirms ignored discovery errors, unchecked procedure starts,
   assumed CCCD handles and premature LINK_UP before subscription success. Its
   isolated acceptance requires bench tests for missing service/characteristic,
@@ -143,6 +143,24 @@ Do not combine these sub-stages in one live test merely because they share a row
   No USB test board is currently enumerated (2026-09-05 19:04); arrange an
   isolated bench target before live deployment. No Stage 5 code or firmware
   changes made, and no fault injection against live battery peripherals.
+- Stage 6a: prepared locally while Stage 5 awaits the bench. The production
+  ARB_CLEAR handler previously erased all queued requests; a native test of
+  the actual task loop reproduced the loss. Cleanup now removes only
+  SRC_INTERNAL/TXN_POLL entries, retaining other requests byte-for-byte and
+  in order. A bounded eight-entry rotation needs no allocation and leaves
+  active-transaction, command counter, backoff and deadline fields unchanged.
+  122,640 native cases exercise every ring occupancy/head/internal-poll placement,
+  all kind/source pairs, busy and non-busy state, idempotence, subsequent
+  fill/drain, and bank isolation under ASAN/UBSAN. All external sends are
+  trapped; no test requests can reach devices. Firmware build passed with
+  unchanged sdkconfig. **Not deployed or live-accepted.**
+  Remaining gate: isolated cold-link/bootstrap and queued-command tests.
+  Retaining writes can expose the existing cross-session stale-work problem
+  (6b), so session safety must be resolved/reviewed before a live rollout;
+  a passing ring test is not proof a queued write is still authorized.
+  Bootstrap posting is still separate from response dispatch and is not made
+  atomic here. Readback/WRITE_RESULT behaviour remains Stage 11. Stages 6b–12
+  remain pending. Live nodes stay on the accepted A Stage 4/B Stage 2 pair.
 
 ## Stage 2 input contract
 
