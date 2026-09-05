@@ -7,11 +7,16 @@ and an explicit acceptance decision before the next live deployment.
 
 ## Current checkpoint — resumed 2026-09-06
 
-Owner resumed work after the overnight pause. Live accepted pair remains
+Owner resumed work after the overnight pause. Last accepted pair remains
 **A Stage 4 / B Stage 2**; recovery
 images and exact identities are in
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage4-runtime/MANIFEST.md`.
-No Stage 5 or Stage 6 firmware has been deployed.
+Stage 5a1 deployed to A on 2026-09-06 07:28; exact ELF
+`9b68ac3f631792d56d658cd4ae62e073277fc77446198737799a95f3765a5aca`
+and OTA VALID verified at uptime 7396 ms. HTTP 200, ota_0, 1,210,608 bytes in
+21.05 s. Post-deployment phone acceptance pending. B unchanged; no Stage 6
+firmware deployed. Reviewed image/backout manifest:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a1-reviewed/MANIFEST.md`.
 
 Local Stage 5a1 draft handles discovery start/callback errors, missing FFE0/FFE1,
 immediate subscription-start rejection and discovery deadline expiry. It rejects
@@ -31,8 +36,9 @@ off the host task; publication isolation remains Stage 8a). Expanded tests cover
 1,000 simultaneous completion/deadline races under ASAN/UBSAN and TSan, and
 GATT-error-before-disconnect ordering. All active tests and final A build pass
 (1,210,608 bytes, unchanged sdkconfig). Live acceptance pending; preflight
-verified A Stage 4/VALID but B
-did not answer at .234. No deployment until both nodes are available.
+verified A Stage 4/VALID but B initially did not answer at .234. Owner asked
+to retry; both expected accepted ELF identities/VALID then confirmed (B uptime
+59.6 s) before A-only deployment. Live phone gate remains pending.
 Bench waiver remains valid; no live fault injection or battery-setting changes.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
