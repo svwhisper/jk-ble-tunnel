@@ -177,7 +177,12 @@ cross-bank times, cache updates without fresh radio frames, held-silent versus
 never-connected deadlines and one publication per boot. Production notify tests
 reject heartbeat/partial/bad-checksum evidence and accept a completed frame.
 All active ASAN/UBSAN, state/discovery TSan and updater tests pass; A build is
-1,212,144 bytes with unchanged sdkconfig. Local only, not deployed yet.
+1,212,144 bytes with unchanged sdkconfig. Committed d54a389; deployed A-only
+2026-09-06 08:28 to ota_1 (HTTP 200, 22.98 s). Exact ELF
+`586d734959a6e48a7b90f7dee8a2309a7f8c8d50c6518010b0f4d61471eec920`
+and OTA VALID verified at uptime 6366 ms. Boot-round/phone/idle acceptance
+pending; B Stage 2 unchanged, Stage 5a3 recovery pair preserved. Manifest:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b1-evidence/MANIFEST.md`.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
