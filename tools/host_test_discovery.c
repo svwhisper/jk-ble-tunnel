@@ -1,11 +1,13 @@
 /* Production callbacks, timeout sweep and request gate with simulated NimBLE
  * procedure results. No radio/network/serial I/O exists in these adapters. */
 #include <assert.h>
+#include "synth_frames.h"
 #include "../node_a/main/ble_owner.c"
 
-static int response_token;
+static int response_token, notify_token, decode_token;
 QueueHandle_t g_q_bms_response = &response_token;
-QueueHandle_t g_q_arb_in, g_q_bms_request, g_q_notify, g_q_decode;
+QueueHandle_t g_q_arb_in, g_q_bms_request;
+QueueHandle_t g_q_notify = &notify_token, g_q_decode = &decode_token;
 EventGroupHandle_t g_evt;
 struct ble_hs_cfg_stub ble_hs_cfg;
 static int64_t test_now;
@@ -23,21 +25,33 @@ static ble_gatt_dsc_fn *dsc_cb;
 static void *dsc_arg;
 static uint16_t dsc_start, dsc_end, written_handle, optional_written_handle;
 static unsigned dsc_calls;
+static unsigned frame_notes, frame_copies;
+static int64_t frame_time;
 static int dsc_rc, optional_dsc_rc;
 static const struct ble_gatt_error ok = {0}, done = { .status = BLE_HS_EDONE },
                                    error = { .status = 5 };
 int64_t esp_timer_get_time(void) { return test_now; }
 BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t ticks)
-{ (void)ticks; assert(q == g_q_bms_response); last_response = *(const bms_response_t *)item; responses++; return pdTRUE; }
+{
+    (void)ticks;
+    if (q == g_q_notify || q == g_q_decode) {
+        assert(!((const notify_item_t *)item)->raw);
+        frame_copies++;
+        return pdTRUE;
+    }
+    assert(q == g_q_bms_response);
+    last_response = *(const bms_response_t *)item; responses++; return pdTRUE;
+}
 EventBits_t xEventGroupSetBits(EventGroupHandle_t g, EventBits_t b)
 { (void)g; return b; }
 EventBits_t xEventGroupClearBits(EventGroupHandle_t g, EventBits_t b)
 { (void)g; (void)b; return 0; }
 void state_set_link_state(uint8_t id, tunnel_link_state_t st, bool held, int64_t seen)
 { assert(id < CFG_NUM_UNITS); (void)seen; last_state = st; last_held = held; state_calls++; }
-void state_note_frame(uint8_t id, int64_t now) { (void)id; (void)now; assert(0); }
+void state_note_frame(uint8_t id, int64_t now)
+{ assert(id == 1); frame_notes++; frame_time = now; }
 void state_get_runtime(uint8_t id, bms_runtime_t *out)
-{ (void)id; (void)out; assert(0); }
+{ assert(id < CFG_NUM_UNITS); memset(out, 0, sizeof(*out)); }
 int ble_gattc_exchange_mtu(uint16_t ch, ble_gatt_mtu_fn *cb, void *arg)
 { (void)ch; assert(!cb && !arg); return mtu_rc; }
 int ble_gattc_disc_svc_by_uuid(uint16_t ch, const ble_uuid_t *uuid, ble_gatt_disc_svc_fn *cb, void *arg)
@@ -401,6 +415,26 @@ int main(void)
         assert(last_response.status == (l->table_ready ? RESP_OK : RESP_TIMEOUT));
         assert(terminate_calls == (l->discovery_failed ? 1u : 0u));
     }
+    /* Trace production notify -> reassembly -> evidence. Neither heartbeats,
+     * partial frames nor a complete corrupt frame count as fresh evidence. */
+    l = setup(7); l->txn_active = false;
+    uint8_t frame[JK_FRAME_MAX];
+    int frame_len = synth_cell_info(frame, sizeof(frame), 1);
+    assert(frame_len > 128);
+    static const uint8_t junk[] = "AT\r\n";
+    on_notify(l, junk, sizeof(junk) - 1);
+    assert(frame_notes == 0 && frame_copies == 0);
+    frame[frame_len - 1] ^= 1;
+    on_notify(l, frame, frame_len);
+    assert(frame_notes == 0 && frame_copies == 0);
+    frame[frame_len - 1] ^= 1;
+    jk_reasm_init(&l->reasm, JK_FRAME_JK02_32S);
+    on_notify(l, frame, 128);
+    assert(frame_notes == 0 && frame_copies == 0);
+    test_now++;
+    on_notify(l, frame + 128, frame_len - 128);
+    assert(frame_notes == 1 && frame_copies == 2 && frame_time == test_now);
+    puts("PASS: frame evidence only after complete checksum-valid production reassembly");
     puts("PASS: production discovery callbacks, errors/deadlines/retry/stale-generation/request gates");
     puts("PASS: 2000 concurrent discovery/ACK/deadline races; disconnect ordering and handle-0 isolation");
     puts("PASS: subscription ACK gating, 260 rejected statuses, malformed/duplicate/stale/missing ACKs");

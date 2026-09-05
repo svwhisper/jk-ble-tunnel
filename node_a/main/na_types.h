@@ -68,7 +68,8 @@ typedef struct {
     bool     app_connected;          /* app holds this identity              */
     bool     link_held;              /* real central link currently up       */
     uint32_t backoff_ms;             /* current reconnect backoff            */
-    int64_t  last_seen_us;           /* last good frame                      */
+    int64_t  last_seen_us;           /* legacy link-up / good-frame activity */
+    int64_t  last_frame_us;          /* complete checksum-valid frame ONLY   */
     int64_t  app_left_us;            /* for idle-disconnect timer            */
     bool     meas_in_progress;
 } bms_runtime_t;

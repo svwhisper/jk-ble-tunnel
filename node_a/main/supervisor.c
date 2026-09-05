@@ -141,7 +141,7 @@ static void verify_tick(int64_t now)
     bms_runtime_t rt; state_get_runtime(id, &rt);
     if (cfg_name_for(id)[0] == '\0') {             /* parked bank */
         strlcpy(s_vfy_result[id], "parked", sizeof(s_vfy_result[id]));
-    } else if (rt.last_seen_us > s_vfy_start_us) { /* frames since round start */
+    } else if (rt.last_frame_us > s_vfy_start_us) { /* valid frame since this bank started */
         strlcpy(s_vfy_result[id], "ok", sizeof(s_vfy_result[id]));
     } else if (now - s_vfy_start_us > 45000000LL) {
         strlcpy(s_vfy_result[id],

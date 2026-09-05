@@ -52,7 +52,8 @@ void state_set_link_state(uint8_t id, tunnel_link_state_t link, bool held,
     bms_runtime_t *rt = &s_state[id].rt;
     rt->link = link;
     rt->link_held = held;
-    /* Preserve current link-up timestamp policy until verification stage 5b.
+    /* Legacy activity drives reconnect/idle policies; do not change those
+     * alongside boot evidence. Link-up never advances last_frame_us.
      * A timestamp sampled before taking the mutex must not move time back. */
     if (seen_us > rt->last_seen_us) rt->last_seen_us = seen_us;
     unlock();
@@ -63,6 +64,7 @@ void state_note_frame(uint8_t id, int64_t seen_us)
     if (id >= CFG_NUM_UNITS) return;
     lock();
     if (seen_us > s_state[id].rt.last_seen_us) s_state[id].rt.last_seen_us = seen_us;
+    if (seen_us > s_state[id].rt.last_frame_us) s_state[id].rt.last_frame_us = seen_us;
     unlock();
 }
 

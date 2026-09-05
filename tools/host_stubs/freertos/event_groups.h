@@ -4,4 +4,5 @@ typedef void *EventGroupHandle_t;
 typedef unsigned EventBits_t;
 EventBits_t xEventGroupSetBits(EventGroupHandle_t group, EventBits_t bits);
 EventBits_t xEventGroupClearBits(EventGroupHandle_t group, EventBits_t bits);
+EventBits_t xEventGroupGetBits(EventGroupHandle_t group);
 #endif

@@ -161,6 +161,24 @@ as predecessor and keep the transient TUN2 startup/control observations open.
 Next isolated stage is 5b boot verification evidence/app-safe release; no 5b
 or Stage 6 firmware is included in this accepted image.
 
+Stage 5b red-team split: 5b1 frame evidence first, 5b2 app-safe release later.
+Local 5b1 adds last_frame_us, written only by complete checksum-valid reassembly,
+and uses it for boot verification. Existing last_seen_us link-up/activity meaning
+and all reconnect/idle policies remain unchanged. "ok" means a complete valid
+frame arrived after this bank's turn began, not sustained streaming, successful
+decode or phone delivery. No new wire/NVS fields or Node B changes. Existing
+45 s bank deadline and once-per-boot polling remain; a silent bank may now
+consume that deadline instead of falsely passing at link-up. Wait for the whole
+round before phone testing while immediate verification release awaits 5b2.
+
+Actual supervisor regression test failed on old link-up/no-frame success, then
+passed with separate evidence. Tests cover boot/MQTT/BLE gates, stale/equal/
+cross-bank times, cache updates without fresh radio frames, held-silent versus
+never-connected deadlines and one publication per boot. Production notify tests
+reject heartbeat/partial/bad-checksum evidence and accept a completed frame.
+All active ASAN/UBSAN, state/discovery TSan and updater tests pass; A build is
+1,212,144 bytes with unchanged sdkconfig. Local only, not deployed yet.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;

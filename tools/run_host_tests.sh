@@ -30,15 +30,20 @@ cc -fsanitize=thread -g -Wall -Wextra -pthread -I tools/host_stubs \
    -I components/common/include -I components/jk_proto/include -I node_a/main \
    tools/host_test_state.c node_a/main/state_cache.c -o "$test_dir/state_tsan"
 "$test_dir/state_tsan"
+cc "${flags[@]}" -Wno-unused-parameter -pthread -ffunction-sections -Wl,-dead_strip \
+   -I tools/host_stubs -I node_a/main -I components/net_util/include -I components/ota/include \
+   tools/host_test_verify.c node_a/main/state_cache.c -o "$test_dir/verify"
+"$test_dir/verify"
 cc "${flags[@]}" -Wno-unused-parameter -ffunction-sections -Wl,-dead_strip \
    -I tools/host_stubs -I node_a/main -I components/net_util/include \
-   tools/host_test_discovery.c components/jk_proto/jk_proto.c -o "$test_dir/discovery"
+   tools/host_test_discovery.c components/jk_proto/jk_proto.c \
+   test_board/main/synth_frames.c -o "$test_dir/discovery"
 "$test_dir/discovery"
 cc -DJK_ENABLE_WRITES=1 -fsanitize=thread -g -Wall -Wextra -Wno-unused-parameter -pthread \
    -ffunction-sections -Wl,-dead_strip -I tools/host_stubs -I node_a/main \
    -I components/common/include -I components/jk_proto/include \
-   -I components/net_util/include tools/host_test_discovery.c \
-   components/jk_proto/jk_proto.c -o "$test_dir/discovery_tsan"
+   -I components/net_util/include -I test_board/main tools/host_test_discovery.c \
+   components/jk_proto/jk_proto.c test_board/main/synth_frames.c -o "$test_dir/discovery_tsan"
 "$test_dir/discovery_tsan"
 python3 -B -m unittest discover -s tools
 echo "Test executables preserved at $test_dir"

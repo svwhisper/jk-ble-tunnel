@@ -45,6 +45,7 @@ static void *frame_writer(void *arg)
     for (int i = 1; i <= ITERATIONS; i++) {
         state_note_frame(0, 1000000 + i);
         assert(get(0).last_seen_us >= 1000000 + i);
+        assert(get(0).last_frame_us >= 1000000 + i);
     }
     return NULL;
 }
@@ -84,6 +85,7 @@ static void *observer(void *arg)
         assert(state_snapshot(0, &st));
         assert(!st.rt.app_connected || st.rt.app_left_us == 0);
         assert(!st.rt.link_held || st.rt.link == LINK_UP);
+        assert(st.rt.last_frame_us <= st.rt.last_seen_us);
         if (st.have_cells) assert(st.cells.cells[0].mv == st.cells.pack_mv);
         if (st.have_settings)
             assert(st.settings.cell_count_set == st.settings.balance_current_a);
@@ -101,6 +103,7 @@ int main(void)
     assert(get(0).app_connected && get(0).last_seen_us == 123);
     state_set_link_state(0, LINK_UP, true, 124);
     assert(get(0).app_connected);
+    assert(get(0).last_seen_us == 124 && get(0).last_frame_us == 123);
     assert(!state_promote_unreachable(0));
     assert(!state_mark_idle_if_unheld(0));
     assert(get(0).link_held && get(0).link == LINK_UP);
@@ -110,6 +113,7 @@ int main(void)
     state_set_link_state(0, LINK_UP, true, 150);
     state_note_frame(0, 180);
     assert(get(0).last_seen_us == 200);
+    assert(get(0).last_frame_us == 200);
 
     /* Stale supervisor cleanup must preserve a subsequent app departure. */
     state_set_app_connected(0, false, 300);
@@ -134,6 +138,7 @@ int main(void)
     state_clear_app_left_if(255, 1);
     assert(!state_promote_unreachable(255) && !state_mark_idle_if_unheld(255));
     assert(get(255).last_seen_us == 0);
+    assert(get(255).last_frame_us == 0);
 
     state_note_frame(0, 1000000);
     pthread_t threads[6];
@@ -145,6 +150,7 @@ int main(void)
         assert(pthread_create(&threads[i], NULL, workers[i], NULL) == 0);
     for (unsigned i = 0; i < 6; i++) assert(pthread_join(threads[i], NULL) == 0);
     assert(get(0).last_seen_us == 1000000 + ITERATIONS);
+    assert(get(0).last_frame_us == 1000000 + ITERATIONS);
     assert(get(0).app_left_us == 2 * ITERATIONS + 1 && !get(0).app_connected);
     assert(get(3).last_seen_us == 999);
     printf("PASS: production state cache, deterministic races + 6 threads x %d iterations\n",

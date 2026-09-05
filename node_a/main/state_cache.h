@@ -30,6 +30,8 @@ void state_set_settings(uint8_t bms_id, const jk_settings_t *s);
 void state_set_app_connected(uint8_t bms_id, bool connected, int64_t now_us);
 void state_set_link_state(uint8_t bms_id, tunnel_link_state_t link, bool held,
                           int64_t seen_us);
+/* Only the complete checksum-valid reassembly path calls this; link-up,
+ * cached decoder state, raw chunks and ATT acknowledgements are not evidence. */
 void state_note_frame(uint8_t bms_id, int64_t seen_us);
 /* Conditional supervisor/arbiter updates recheck current state under lock.
  * Return true only if the requested reachability update was applied. */
