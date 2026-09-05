@@ -219,6 +219,24 @@ after verification to connect TUN2 and hold Status readings 90 s, then disconnec
 boot/app-overlap and final idle acceptance pending. Stage 5b1 pair preserved.
 Manifest: `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b2-release/MANIFEST.md`.
 
+Stage 5b2 live exception: TUN2 attached during boot (app=true at uptime 34 s),
+but owner reported connected with a non-updating display through the requested
+test, then confirmed it started updating on its own, without page switch or
+reconnect. No intervening firmware/reset/settings change. Bank 2 had a real
+BLE timeout (0x208) at 27 s and reconnected at 38 s; verify reported all four
+ok at 42 s. During the reported display stall, A continued publishing fresh
+changing bank-2 summary values. Thus a ready BLE link/valid-frame boot report
+does not establish successful phone initialisation or delivery.
+
+Backout was announced after failed acceptance, but held before any upload when
+owner reported recovery. **Stage 5b2 remains deployed but unaccepted**; Stage
+5b1 remains the accepted recovery point, and no subsequent stage may deploy.
+Owner disconnected after confirming self-recovery; post-session idle check in
+progress. Earlier TUN2 transient behaviour predates 5b2, so neither new release
+policy causation nor a particular queue/replay fault is proven. Delayed initial
+exchange is a hypothesis, not a diagnosed fix. No further live control toggles,
+USB console access or fault injection requested.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;
