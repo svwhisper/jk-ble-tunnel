@@ -62,5 +62,12 @@ High-risk rows are separate stages, never a single combined deployment.
 ## Status
 
 - Stage 0: complete; baseline saved and branch created.
-- Stage 1: implementation in progress; no new firmware deployed yet.
+- Stage 1: local implementation committed as `8329df0`; 16 updater tests and
+  35 sanitizer-enabled protocol checks passed, both firmware targets built.
+  Node B deployed successfully (HTTP 200, ota_1); exact expected ELF
+  `79888f98507eb6dda5e7f20cefcef86cef087c5d67b381ee22af2a2224e0af8c`
+  and OTA VALID verified. **Awaiting owner read-only phone/app check. Node A
+  has NOT been deployed.** No later stage is accepted or deployed.
+- Stage 1 artifacts and backout commands:
+  `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage1-ota/MANIFEST.md`.
 - Stages 2–12: pending; acceptance gates deliberately prevent batch deployment.
