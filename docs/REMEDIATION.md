@@ -138,6 +138,16 @@ the final setting). No further toggle tests needed. Next acceptance check is
 a read-only cold TUN2 session after disconnect/idle, opening Status directly
 without the Settings-page workaround; Stage 5a3 remains provisional.
 
+08:08 owner answered "all seems fine" to the requested 90 s idle/reconnect,
+direct-Status, read-only TUN2 test: phone acceptance passed. Both exact running
+ELF identities and OTA VALID rechecked (A Stage 5a3, B Stage 2). Fresh telemetry
+at A uptime 817 s shows TUN2 app_connected=true/link up, others idle/app=false,
+conn/disc 19/18, internal free heap 99,327 (minimum 94,311), OTA/BLE up. One
+held link is consistent with the still-open phone session, not a demonstrated
+idle leak. Final post-session idle gate remains before the next deployment;
+earlier recovered blank-page/control symptoms remain unresolved observations,
+not claimed fixed by descriptor discovery. No additional device changes.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;
