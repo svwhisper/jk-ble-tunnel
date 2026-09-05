@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "cJSON.h"
+#include "command_validation.h"
 
 static const char *TAG = "arbiter";
 
@@ -161,24 +162,25 @@ static const cfg_range_t *whitelist_lookup(const char *key)
 
 static void handle_balance_set(uint8_t id, const char *json, const char *cid)
 {
-    cJSON *root = cJSON_Parse(json);
+    cJSON *root = cJSON_ParseWithOpts(json, NULL, true);
     if (!root) { mqtt_ack(id, "balance/set", cid, "bad_json", NULL, NULL); return; }
 
-    /* One register per command (the app writes one register per frame, and a
-     * single-key command keeps readback unambiguous). Reject multi-key. */
-    if (!root->child || root->child->next) {
-        mqtt_ack(id, "balance/set", cid, "one_key_per_command", NULL, NULL);
+    /* Exactly one setting plus an optional correlation id. Validate shape
+     * and type before touching a key or interpreting cJSON's numeric union. */
+    const cJSON *it;
+    double v;
+    const char *error = balance_command_validate(root, &it, &v);
+    if (error) {
+        mqtt_ack(id, "balance/set", cid, error, NULL, NULL);
         cJSON_Delete(root); return;
     }
 
     /* 1. whitelist + 2. range clamp. */
-    cJSON *it = root->child;
     const cfg_range_t *rg = whitelist_lookup(it->string);
     if (!rg) {
         mqtt_ack(id, "balance/set", cid, "rejected_out_of_scope", it->string, NULL);
         cJSON_Delete(root); return;
     }
-    double v = cJSON_IsBool(it) ? (cJSON_IsTrue(it) ? 1 : 0) : it->valuedouble;
     if (v < rg->min || v > rg->max) {
         ESP_LOGW(TAG, "range reject %s=%f", it->string, v);
         mqtt_ack(id, "balance/set", cid, "out_of_range", it->string, NULL);
@@ -321,6 +323,7 @@ static void rb_tick(void)
 static void on_response(const bms_response_t *rsp)
 {
     uint8_t id = rsp->bms_id;
+    if (id >= CFG_NUM_UNITS) return;
     pend_t *p = &s_pend[id];
     p->busy = false;
 
@@ -408,21 +411,24 @@ static void check_link_guards(void)
  * Dropping the odd internal poll under overload is fine; it is re-issued. */
 static void arb_in_send(const arb_msg_t *m)
 {
+    if (m->bms_id >= CFG_NUM_UNITS) return;
     if (xQueueSend(g_q_arb_in, m, pdMS_TO_TICKS(20)) != pdTRUE)
         ESP_LOGW(TAG, "arb_in full — dropped (bms %u kind %d)", m->bms_id, m->kind);
 }
 
 void arbiter_submit(const bms_request_t *req)
 {
+    if (!req || req->bms_id >= CFG_NUM_UNITS || req->payload_len > REQ_PAYLOAD_MAX)
+        return;
     arb_msg_t m = { .kind = ARB_REQ, .bms_id = req->bms_id, .req = *req };
     arb_in_send(&m);
 }
-void arbiter_app_write(uint8_t id, uint8_t idx, bool wr, const uint8_t *d, uint8_t n)
+void arbiter_app_write(uint8_t id, uint8_t idx, bool wr, const uint8_t *d, uint16_t n)
 {
+    if (id >= CFG_NUM_UNITS || idx > 1 || !d || n == 0 || n > REQ_PAYLOAD_MAX) return;
     bms_request_t r = { .bms_id = id, .kind = TXN_RAW_WRITE, .source = SRC_APP,
                         .idx = idx, .with_response = wr, .response_needed = wr,
-                        .timeout_ms = 3000, .payload_len = n };
-    if (n > REQ_PAYLOAD_MAX) n = REQ_PAYLOAD_MAX;
+                        .timeout_ms = 3000, .payload_len = (uint8_t)n };
     memcpy(r.payload, d, n);
     arbiter_submit(&r);
 }
@@ -464,6 +470,8 @@ static void submit_mqtt(uint8_t id, arb_mqtt_t t, const char *json, const char *
 {
     arb_msg_t m = { .kind = ARB_MQTT, .bms_id = id };
     m.mqtt.type = t;
+    if ((json && strlen(json) >= sizeof(m.mqtt.json)) ||
+        (cid && strlen(cid) >= sizeof(m.mqtt.id))) return;
     if (json) strlcpy(m.mqtt.json, json, sizeof(m.mqtt.json));
     if (cid)  strlcpy(m.mqtt.id, cid, sizeof(m.mqtt.id));
     arb_in_send(&m);

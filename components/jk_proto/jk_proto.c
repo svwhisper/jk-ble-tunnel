@@ -9,6 +9,7 @@
  * ported and bench-checked (O-2).
  */
 #include <string.h>
+#include <math.h>
 #include "jk_proto.h"
 
 /* JK02 response start magic. VERIFY. */
@@ -192,6 +193,7 @@ int jk_decode_cell_info(jk_frame_ver_t ver, const uint8_t *frame, uint16_t len,
 int jk_decode_settings(jk_frame_ver_t ver, const uint8_t *frame, uint16_t len,
                        jk_settings_t *out)
 {
+    if (len < JK02_RECORD_LEN) return -1;
     if (jk_frame_record(frame, len) != JK_REC_SETTINGS) return -1;
     memset(out, 0, sizeof(*out));
     out->ver = ver;
@@ -279,7 +281,7 @@ int jk_build_balance_write(jk_frame_ver_t ver, const char *key, double value,
 {
     (void)ver;   /* register map is identical across the fleet's frame versions */
 #if JK_ENABLE_WRITES
-    if (out_cap < JK_CMD_FRAME_LEN) return -1;
+    if (!key || !out || !isfinite(value) || out_cap < JK_CMD_FRAME_LEN) return -1;
     const jk_setting_reg_t *r = NULL;
     for (size_t i = 0; i < JK_SETTING_REGS_N; i++)
         if (strcmp(JK_SETTING_REGS[i].key, key) == 0) { r = &JK_SETTING_REGS[i]; break; }
@@ -289,7 +291,7 @@ int jk_build_balance_write(jk_frame_ver_t ver, const char *key, double value,
      * and anything that would overflow u32 (the arbiter range-clamps first, so
      * this is defense in depth). */
     double scaled = value * r->scale;
-    if (scaled < 0.0 || scaled > 4294967295.0) return -1;
+    if (!isfinite(scaled) || scaled < 0.0 || scaled > 4294967295.0) return -1;
     uint32_t iv = (uint32_t)(scaled + 0.5);
 
     memset(out, 0, JK_CMD_FRAME_LEN);

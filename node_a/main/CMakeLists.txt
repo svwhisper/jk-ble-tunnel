@@ -5,6 +5,7 @@ idf_component_register(
         "state_cache.c"
         "nvs_store.c"
         "arbiter.c"
+        "command_validation.c"
         "ble_owner.c"
         "decoder.c"
         "tunnel_srv.c"

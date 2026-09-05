@@ -17,6 +17,7 @@
 #include "ble_periph.h"
 #include "adv_mgr.h"
 #include "tunnel_proto.h"
+#include "tunnel_validate.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -33,14 +34,20 @@ bool tunnel_cli_up(void) { return s_up; }
 static uint16_t frame(uint8_t *o, uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
 { o[0]=type; o[1]=id; o[2]=len&0xFF; o[3]=len>>8; if(len) memcpy(o+4,pl,len); return 4+len; }
 
-static void enqueue(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
-{ tun_out_t m; m.len = frame(m.buf, type, id, pl, len); xQueueSend(s_out, &m, 0); }
-
-void tunnel_cli_send_write(uint8_t id, uint8_t idx, bool wr, const uint8_t *d, uint16_t len)
+static bool enqueue(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
 {
-    uint8_t pl[2 + TUNNEL_MAX_PAYLOAD]; pl[0]=idx; pl[1]=wr?1:0;
-    if (len > TUNNEL_MAX_PAYLOAD-2) len = TUNNEL_MAX_PAYLOAD-2;
-    memcpy(pl+2, d, len); enqueue(TUN_WRITE, id, pl, len+2);
+    if (!s_out || len > TUNNEL_MAX_PAYLOAD) return false;
+    tun_out_t m; m.len = frame(m.buf, type, id, pl, len);
+    return xQueueSend(s_out, &m, 0) == pdTRUE;
+}
+
+bool tunnel_cli_send_write(uint8_t id, uint8_t idx, bool wr, const uint8_t *d, uint16_t len)
+{
+    if (id >= CFG_NUM_UNITS || idx > 1 || !d || len == 0 || len > TUNNEL_MAX_WRITE_DATA)
+        return false;
+    uint8_t pl[2 + TUNNEL_MAX_WRITE_DATA]; pl[0]=idx; pl[1]=wr?1:0;
+    memcpy(pl+2, d, len);
+    return enqueue(TUN_WRITE, id, pl, len+2);
 }
 void tunnel_cli_send_client(uint8_t id, bool c)
 { uint8_t b = c?1:0; enqueue(TUN_CLIENT, id, &b, 1); }
@@ -48,11 +55,14 @@ void tunnel_cli_send_client(uint8_t id, bool c)
 /* ---- inbound ------------------------------------------------------------ */
 static void on_frame(uint8_t type, uint8_t id, const uint8_t *pl, uint16_t len)
 {
+    if (!tunnel_to_b_valid(type, id, pl, len, CFG_NUM_UNITS, NB_MAX_CHARS, NB_CACHE_MAX)) {
+        ESP_LOGW(TAG, "rejected malformed frame type=%u id=%u len=%u", type, id, len);
+        return;
+    }
     switch (type) {
     case TUN_TABLE: {                         /* [char_count][descs...] */
         nb_blueprint_t bp = {0};
         bp.char_count = pl[0];
-        if (bp.char_count > NB_MAX_CHARS) bp.char_count = NB_MAX_CHARS;
         memcpy(bp.chars, pl+1, bp.char_count * sizeof(tunnel_char_desc_t));
         nb_set_blueprint(&bp);
         ble_periph_rebuild_table();           /* register the single shared table */

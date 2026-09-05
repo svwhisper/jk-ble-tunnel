@@ -28,7 +28,7 @@ typedef enum {
     TXN_DISCONNECT,  /* tear down link                                      */
 } txn_kind_t;
 
-#define REQ_PAYLOAD_MAX 32   /* app writes / cmd frames are small            */
+#define REQ_PAYLOAD_MAX TUNNEL_MAX_WRITE_DATA
 
 /* q_bms_request item (arbiter -> ble_owner). */
 typedef struct {

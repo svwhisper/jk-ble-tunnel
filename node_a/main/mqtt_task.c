@@ -11,6 +11,7 @@
 #include "ota.h"
 #include "mqtt_client.h"
 #include "cJSON.h"
+#include "command_validation.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -128,6 +129,8 @@ void mqtt_publish_appwrite(uint8_t bms_id, const uint8_t *data, uint16_t len)
 static void on_cmd(const char *t, int tlen, const char *data, int dlen)
 {
     /* esp-mqtt topics are not NUL-terminated — copy before any string op. */
+    if (tlen <= 0 || tlen >= 64 || dlen <= 0 || dlen >= 192 ||
+        !t || !data || memchr(t, 0, tlen) || memchr(data, 0, dlen)) return;
     char topic[64] = {0};
     int tl = tlen < (int)sizeof(topic) - 1 ? tlen : (int)sizeof(topic) - 1;
     memcpy(topic, t, tl);
@@ -227,6 +230,11 @@ static void ev_handler(void *arg, esp_event_base_t base, int32_t ev, void *data)
         xEventGroupClearBits(g_evt, EVT_MQTT_UP);
         break;
     case MQTT_EVENT_DATA:
+        if (!command_event_valid(e->retain, e->current_data_offset,
+                                 e->total_data_len, e->data_len, e->topic_len)) {
+            ESP_LOGW(TAG, "ignored retained, fragmented or oversized command");
+            break;
+        }
         on_cmd(e->topic, e->topic_len, e->data, e->data_len);
         break;
     default: break;

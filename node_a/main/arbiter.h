@@ -17,7 +17,7 @@ void arbiter_submit(const bms_request_t *req);
 
 /* Convenience wrappers used by the other tasks. */
 void arbiter_app_write(uint8_t bms_id, uint8_t idx, bool with_resp,
-                       const uint8_t *data, uint8_t len);
+                       const uint8_t *data, uint16_t len);
 void arbiter_poll(uint8_t bms_id, uint8_t opcode);          /* internal poll */
 void arbiter_set_app_connected(uint8_t bms_id, bool connected); /* from tunnel */
 void arbiter_notify_settings(uint8_t bms_id);  /* decoder: a settings frame decoded */

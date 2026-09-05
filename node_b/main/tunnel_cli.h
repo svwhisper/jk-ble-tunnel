@@ -14,7 +14,8 @@ void tunnel_cli_start(void);
 bool tunnel_cli_up(void);
 
 /* Called by ble_periph. Enqueue app-originated events to A. */
-void tunnel_cli_send_write(uint8_t bms_id, uint8_t idx, bool with_resp,
+/* False means rejected/queue full: caller must not acknowledge acceptance. */
+bool tunnel_cli_send_write(uint8_t bms_id, uint8_t idx, bool with_resp,
                            const uint8_t *data, uint16_t len);
 void tunnel_cli_send_client(uint8_t bms_id, bool connected);
 

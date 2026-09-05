@@ -97,14 +97,16 @@ static int chr_access(uint16_t conn, uint16_t attr,
         return os_mbuf_append(ctxt->om, c.data, c.len) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES; /* NIMBLE-PASS */
     }
     case BLE_GATT_ACCESS_OP_WRITE_CHR: {
-        uint8_t buf[256];
+        uint8_t buf[TUNNEL_MAX_WRITE_DATA];
         uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-        if (len > sizeof(buf)) len = sizeof(buf);
-        ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL);        /* NIMBLE-PASS */
+        if (len == 0 || len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        if (ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL) != 0)
+            return BLE_ATT_ERR_UNLIKELY;
         /* Complete the ATT write immediately; forward to A (spec §6). The app
          * confirms at the frame level via notifications, not ATT status. */
         bool with_resp = (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR);
-        tunnel_cli_send_write(id, 0, with_resp, buf, len);
+        if (!tunnel_cli_send_write(id, 0, with_resp, buf, len))
+            return BLE_ATT_ERR_INSUFFICIENT_RES;
         /* THE APP'S OPENER ARRIVES HERE, ON FFE1 — not FFE2 (proved live
          * 2026-08-30: appwrites flowed while the FFE2 handler logged
          * nothing). Replay-on-FFE2-only meant the phone NEVER got a warm
@@ -206,11 +208,13 @@ static int chr2_access(uint16_t conn, uint16_t attr,
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return BLE_ATT_ERR_UNLIKELY;
     int id = identity_for_conn(conn);
     if (id < 0) return BLE_ATT_ERR_UNLIKELY;
-    uint8_t buf[256];
+    uint8_t buf[TUNNEL_MAX_WRITE_DATA];
     uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
-    if (len > sizeof(buf)) len = sizeof(buf);
-    ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL);
-    tunnel_cli_send_write((uint8_t)id, 1, false, buf, len);
+    if (len == 0 || len > sizeof(buf)) return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    if (ble_hs_mbuf_to_flat(ctxt->om, buf, len, NULL) != 0)
+        return BLE_ATT_ERR_UNLIKELY;
+    if (!tunnel_cli_send_write((uint8_t)id, 1, false, buf, len))
+        return BLE_ATT_ERR_INSUFFICIENT_RES;
 
     /* Warm-start replay (2026-08-30): the app's opener is a command frame
      * AA 55 90 EB <op> ... on FFE2 — 0x97 asks for device-info, 0x96 for cell

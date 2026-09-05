@@ -13,6 +13,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include "tunnel_srv.h"
+#include "tunnel_validate.h"
 #include "queues.h"
 #include "config.h"
 #include "arbiter.h"
@@ -126,6 +127,10 @@ void tunnel_srv_refresh(void)
 /* ---- inbound handling --------------------------------------------------- */
 static void on_frame(uint8_t type, uint8_t bms_id, const uint8_t *pl, uint16_t len)
 {
+    if (!tunnel_to_a_valid(type, bms_id, pl, len, CFG_NUM_UNITS)) {
+        ESP_LOGW(TAG, "rejected malformed frame type=%u id=%u len=%u", type, bms_id, len);
+        return;
+    }
     switch (type) {
     case TUN_TABLE_REQ:
         tunnel_srv_announce();

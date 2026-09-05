@@ -20,6 +20,7 @@
 #define TUNNEL_BMS_ID_LINK       0xFF   /* link-level frames (PING, TABLE)      */
 #define TUNNEL_MAX_PAYLOAD       512    /* largest real payload = one 300 B frame + idx */
 #define TUNNEL_HDR_LEN           4
+#define TUNNEL_MAX_WRITE_DATA    32     /* fixed Node A request storage; never truncate */
 
 /* Frame types. Values are wire-stable — never renumber, only append. */
 typedef enum {
