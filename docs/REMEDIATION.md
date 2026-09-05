@@ -329,6 +329,46 @@ do not accidentally restore/bundle it into a Stage 5 deployment.
 
 ## Categories and order
 
+### Resumed local work: Stage 6c before queue retention (2026-09-06)
+
+Owner requested proceeding with remediation after the captured successful warm
+and idle-to-connected TUN1 comparisons. This is not a claim that the intermittent
+display fault is fixed. Live A remains 5b2/B2; accepted fallback remains A5b1/B2.
+
+Red-team review keeps 6a queue retention excluded: app commands need protection
+across both pending/dispatch queues and the final BLE execution boundary, and
+queued MQTT writes must not violate later app priority. Merely filtering the
+pending ring cannot establish that safety. Session fencing remains separate.
+Take independent **6c false-to-false resync suppression** first; no 6a/6b code
+is included. This reordering changes neither the wire format nor replay policy.
+
+Local production change is one guard in `on_app_conn`: if already disconnected,
+ignore another CLIENT=false. The arbiter task is the sole production writer of
+app_connected, so its locked snapshot check cannot race another app transition.
+Real true-to-false departure still records its original timestamp and queues
+the existing one post-app poll; true and repeated-true behavior is unchanged.
+The wrong post-app opcode, dropped transition messages, pending work/session
+fencing, queued stale disconnects and write confirmation are NOT fixed here.
+
+A native test runs the actual arbiter task handler and real locked state cache
+with queue adapters that capture requests and cannot access any device. Old
+code reproduced the bug: initial CLIENT=false emitted one poll and set the
+departure timestamp. Fixed code passes 16,025 boot/attach/departure/resync cases,
+all banks, held/unheld links, repeated false before/after supervisor timestamp
+cleanup, bank isolation and unchanged true resync. Full host suite passed with
+ASAN/UBSAN and existing threaded TSan suites; 16 OTA updater tests also passed.
+Executables: `/private/tmp/jk-host-tests.1raXFk`. A firmware build passed with
+sdkconfig unchanged from baseline; 1,212,112 bytes. No B build is needed for
+an A-only internal handler change, and B will not be deployed.
+
+**LOCAL ONLY, NOT DEPLOYED OR ACCEPTED.** The candidate explicitly inherits
+live but unaccepted 5b2; do not silently promote that ancestor or call this an
+accepted recovery pair. Saved candidate manifest records both the immediate
+5b2 predecessor and the accepted 5b1 fallback. No new OTA, reset, NVS or battery
+setting changes. Before rollout, make an explicit checkpoint decision on the
+known intermittent fault, verify both image identities, and arrange a fresh
+read-only phone/idle acceptance test. Do not fault-inject a live tunnel/broker.
+
 Complexity/risk are implementation/change risk, not severity of the existing bug.
 High-risk rows are separate stages, never a single combined deployment.
 For categories with independent high-risk fixes, use separate sub-stages:

@@ -21,6 +21,11 @@ cc "${flags[@]}" -I "$json_dir" -I node_a/main tools/host_test_inputs.c \
    node_a/main/command_validation.c "$json_dir/cJSON.c" \
    components/jk_proto/jk_proto.c test_board/main/synth_frames.c -o "$test_dir/inputs"
 "$test_dir/inputs"
+cc "${flags[@]}" -Wno-unused-parameter -pthread -I tools/host_stubs -I node_a/main \
+   -I "$json_dir" tools/host_test_app_edges.c node_a/main/state_cache.c \
+   node_a/main/command_validation.c components/jk_proto/jk_proto.c \
+   "$json_dir/cJSON.c" -o "$test_dir/app_edges"
+"$test_dir/app_edges"
 cc "${flags[@]}" -pthread -I tools/host_stubs -I node_a/main \
    tools/host_test_state.c node_a/main/state_cache.c -o "$test_dir/state"
 "$test_dir/state"

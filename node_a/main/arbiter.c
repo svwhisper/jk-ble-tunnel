@@ -356,6 +356,10 @@ static void on_response(const bms_response_t *rsp)
 /* ---- app-connect handling ---------------------------------------------- */
 static void on_app_conn(uint8_t id, bool connected)
 {
+    /* CLIENT=false is also a tunnel resync, not necessarily a departure.
+     * Only this task writes app_connected: repeated false must neither wake
+     * an idle BMS with a poll nor extend the original departure grace. */
+    if (!connected && !rt_app_connected(id)) return;
     rt_set_app(id, connected);
     pend_t *p = &s_pend[id];
     if (connected) {
