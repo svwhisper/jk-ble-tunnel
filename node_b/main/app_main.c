@@ -45,6 +45,7 @@ void app_main(void)
     nightly_reboot_start(CFG_TZ, 1, 5, NULL);   /* unconditional */
     net_wifi_set_txpower(CFG_WIFI_MAX_TX_QDBM);          /* marginal-supply guard */
     net_wifi_wait(20000);
+    ota_start(CFG_OTA_PORT);      /* reserve recovery resources before NimBLE */
 
     nb_state_init();
     adv_mgr_init();               /* generate per-set static-random addresses  */
@@ -58,16 +59,15 @@ void app_main(void)
     esp_task_wdt_init(&wdt);
 
     tunnel_cli_start();           /* connect to Node A, resync, grace window    */
-    supervisor_start();
     display_start();              /* onboard OLED: role + status                */
 
     /* Push-OTA. Start the receiver UNCONDITIONALLY: httpd binds 0.0.0.0 and
      * serves once an IP arrives, so a node that joins WiFi late still exposes
      * :CFG_OTA_PORT without a reboot. Confirm the running image only once WiFi
      * is up; a bad build that can't join is left unconfirmed and self-reverts. */
-    ota_start(CFG_OTA_PORT);
     if (net_wifi_up()) ota_mark_valid();
     else ESP_LOGW(TAG, "no WiFi at bringup — image left unconfirmed (rollback armed)");
 
+    supervisor_start();          /* may retry OTA/confirmation after bringup */
     ESP_LOGI(TAG, "Node B up");
 }

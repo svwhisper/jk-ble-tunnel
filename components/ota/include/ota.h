@@ -17,15 +17,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Confirm the running image so the bootloader won't roll it back. Call ONCE,
- * only after the device is known-healthy (we call it after WiFi is up). A
+/* Confirm the running image so the bootloader won't roll it back. Call only
+ * after application bringup and with WiFi up; safe to retry from supervisor.
+ * Refuses confirmation until the OTA routes have registered successfully. A
  * freshly-pushed image boots in PENDING_VERIFY; if it never reaches this call
  * (e.g. it crashes or can't join WiFi) the bootloader reverts on next reset.
  * A no-op when the running image isn't pending (e.g. a fresh USB flash). */
 void ota_mark_valid(void);
 
-/* Start the push-OTA HTTP receiver on `port` (POST /ota). Idempotent-ish:
- * call once after the network is up. */
+/* Start POST /ota and read-only GET /ota/status (ELF SHA, OTA state, uptime).
+ * Call before NimBLE resource allocation, then retry from the supervisor if
+ * needed. Application startup and supervisor must not call concurrently. */
 void ota_start(uint16_t port);
 
 /* Reboot in ~1 s via a pre-existing esp_timer — safe under internal-heap

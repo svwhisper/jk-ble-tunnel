@@ -12,7 +12,9 @@
  * ota_mark_valid() (called only once WiFi is up), a bad *build* self-reverts.
  */
 #include <string.h>
+#include <stdio.h>
 #include "ota.h"
+#include "esp_app_desc.h"
 #include "esp_http_server.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -60,6 +62,8 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 {
     const esp_partition_t *upd = esp_ota_get_next_update_partition(NULL);
     if (!upd) return fail(req, 0, "500 Internal Server Error", "no OTA slot");
+    if (req->content_len == 0 || req->content_len > upd->size)
+        return fail(req, 0, "413 Content Too Large", "empty image or image exceeds OTA slot");
     ESP_LOGI(TAG, "OTA start -> %s (%d bytes announced)", upd->label, req->content_len);
 
     esp_ota_handle_t h = 0;
@@ -109,6 +113,27 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 
 bool ota_is_up(void) { return s_srv != NULL; }
 
+/* Read-only evidence for the updater. An open listener alone cannot distinguish
+ * a successful update from the old image, an automatic rollback, or a boot
+ * which has not yet cancelled rollback. No battery/network details exposed. */
+static esp_err_t ota_status_handler(httpd_req_t *req)
+{
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    esp_ota_img_states_t state;
+    int st = esp_ota_get_state_partition(run, &state) == ESP_OK ? (int)state : -1;
+    char sha[65];
+    const esp_app_desc_t *app = esp_app_get_description();
+    for (size_t i = 0; i < sizeof(app->app_elf_sha256); i++)
+        snprintf(sha + 2 * i, 3, "%02x", app->app_elf_sha256[i]);
+    char body[192];
+    snprintf(body, sizeof(body),
+             "{\"elf_sha256\":\"%s\",\"ota_state\":%d,\"uptime_ms\":%lld}",
+             sha, st, (long long)(esp_timer_get_time() / 1000));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_sendstr(req, body);
+}
+
 void ota_start(uint16_t port)
 {
     if (s_srv) return;
@@ -118,7 +143,8 @@ void ota_start(uint16_t port)
     cfg.recv_wait_timeout = 15;
     cfg.send_wait_timeout = 15;
     cfg.lru_purge_enable  = true;
-    if (httpd_start(&s_srv, &cfg) != ESP_OK) {
+    httpd_handle_t srv = NULL;
+    if (httpd_start(&srv, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed on port %u", port);
         s_srv = NULL;
         return;
@@ -126,17 +152,30 @@ void ota_start(uint16_t port)
     static const httpd_uri_t u = {
         .uri = "/ota", .method = HTTP_POST, .handler = ota_post_handler, .user_ctx = NULL,
     };
-    httpd_register_uri_handler(s_srv, &u);
+    static const httpd_uri_t status = {
+        .uri = "/ota/status", .method = HTTP_GET, .handler = ota_status_handler,
+    };
+    if (httpd_register_uri_handler(srv, &u) != ESP_OK ||
+        httpd_register_uri_handler(srv, &status) != ESP_OK) {
+        ESP_LOGE(TAG, "OTA handler registration failed; stopping server for retry");
+        httpd_stop(srv);
+        return;
+    }
+    s_srv = srv;  /* advertise ready only when both routes exist */
     ESP_LOGI(TAG, "push-OTA receiver up: POST http://<host>:%u/ota", port);
 }
 
 void ota_mark_valid(void)
 {
+    if (!ota_is_up()) return;  /* never confirm an image with no recovery server */
     const esp_partition_t *run = esp_ota_get_running_partition();
     esp_ota_img_states_t st;
     if (esp_ota_get_state_partition(run, &st) != ESP_OK) return;
     if (st == ESP_OTA_IMG_PENDING_VERIFY) {
-        esp_ota_mark_app_valid_cancel_rollback();
-        ESP_LOGI(TAG, "running image confirmed valid (rollback cancelled)");
+        esp_err_t e = esp_ota_mark_app_valid_cancel_rollback();
+        if (e == ESP_OK)
+            ESP_LOGI(TAG, "running image confirmed valid (rollback cancelled)");
+        else
+            ESP_LOGE(TAG, "image confirmation failed: %s", esp_err_to_name(e));
     }
 }

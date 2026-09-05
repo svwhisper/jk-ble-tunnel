@@ -402,7 +402,10 @@ static void supervisor_task(void *arg)
          * race (observed failing at second ~5 on every boot of one image,
          * leaving the node un-updatable). ota_start is idempotent. */
         { static int oa; if (++oa >= 30) { oa = 0;
-              if (!ota_is_up() && net_wifi_up()) ota_start(CFG_OTA_PORT); } }
+              if (net_wifi_up()) {
+                  if (!ota_is_up()) ota_start(CFG_OTA_PORT);
+                  ota_mark_valid();
+              } } }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

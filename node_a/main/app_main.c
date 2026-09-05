@@ -62,7 +62,6 @@ void app_main(void)
     ble_owner_start();             /* NimBLE central (the only BLE task)     */
     mqtt_start();                  /* automation (MQTT) path + LWT           */
     tunnel_srv_start();            /* Node B tunnel                          */
-    supervisor_start();            /* harvest, probes, idle-disc, meas guard */
     display_start();               /* onboard OLED: role + status            */
 
     /* Confirm the running image only once WiFi is actually up; a bad build
@@ -71,5 +70,6 @@ void app_main(void)
     if (net_wifi_up()) ota_mark_valid();
     else ESP_LOGW(TAG, "no WiFi at bringup — image left unconfirmed (rollback armed)");
 
+    supervisor_start();            /* retry confirmation only after bringup */
     ESP_LOGI(TAG, "Node A up");
 }
