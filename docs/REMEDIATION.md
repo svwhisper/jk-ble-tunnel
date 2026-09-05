@@ -13,7 +13,9 @@ images and exact identities are in
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b1-evidence/MANIFEST.md`.
 Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false,
 conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
-Stage 5b2 app-safe verification release is next and is not included in this image.
+Live exception: **A Stage 5b2 is deployed but unaccepted** following delayed
+phone-display failures described below. B remains Stage 2. Stage 5b2 is not
+included in the accepted recovery pair; no subsequent stage may deploy yet.
 Stage 5a3 accepted at 08:14 after owner cold-session phone pass and fresh idle
 telemetry: all four links reachable-idle/app=false, conn/disc 19/19, OTA/BLE up
 at A uptime 1148–1163 s. Earlier intermittent TUN2 symptoms remain unresolved
@@ -240,6 +242,85 @@ Subsequent fresh telemetry at uptime 215–230 s confirmed all four links idle/
 app=false, conn/disc 7/7, OTA/BLE up, internal free heap 99,295–99,503 (minimum
 94,523). Idle release gate passed, but delayed initial phone display remains
 an acceptance failure; do not promote 5b2 merely because it later recovered.
+
+### Read-only reconnect diagnosis, 2026-09-06 08:49–08:54
+
+At the owner's request, captured B USB and A's existing UDP log broadcast.
+B was opened with raw `O_RDONLY|O_NOCTTY|O_NONBLOCK`, without termios, ioctl,
+control-line operations or writes. OTA uptime advanced 2,904,873 to 2,929,950 ms,
+confirming no reset on this opening. This differs from the earlier pyserial
+opening that reset B. Both bounded four-minute readers subsequently exited.
+A's UDP mirror was already enabled; the laptop listener was newly started.
+No firmware, configuration or battery-setting changes were made.
+
+- TUN2 connected at B uptime 3,021,923 ms; CCCD enabled at 3,022,584;
+  opener 0x97 at 3,022,704; cached-reply delivery attempted at 3,022,774
+  (851 ms after connection). Notification attempts continued. A second
+  opener 0x96 at 3,024,415 led to replay bits 0x06 at 3,024,488 while
+  live notification attempts were also occurring. The owner reported slow
+  initial Status display, then switched to TUN1 (correcting an initial TUN2
+  label), where the page appeared but updates stalled and later resumed.
+- A's bank-1 log showed command 0x33 timeout at uptime 487,370 ms,
+  disconnect reason 0x208 at 510,065, and "streamed 26s then died" plus
+  app-link-up timeout at 510,312–510,314. It scanned/reconnected and resumed
+  GATT setup at 512,540–514,064. This is concrete source-side interruption
+  during the test, not proof that it explains the whole phone-display delay.
+- B's later ten-second snapshots consistently reported `conns=1 tunnel=1`,
+  with continuing notification attempts. They do not prove identity-specific
+  delivery, complete frames, or acceptance by the phone. A large initial USB
+  output was truncated in the displayed tool result; later tails were retained.
+  UDP logging is best-effort, so missing lines are not evidence of missing GATT
+  operations. Node clocks differ; do not compare their raw uptime values.
+
+Red-team conclusion: do not diagnose every stall as one fault. A real bank-1
+radio interruption is observed, whereas the earlier bank-2 display failure
+occurred with fresh changing decoded values on A. Existing B delivery flaws
+remain candidates: `ble_periph_forward_notify` marks device-info answered
+before allocation/notify success, ignores notify return codes, and drops the
+remaining bytes on allocation failure. `nb_replay_action` can then cancel all
+reply bits based on that first device-info chunk. `serve` invokes replay after
+each tunnel message, not each complete JK record, allowing cached records to
+interrupt a fragmented live record. Code establishes these failure mechanisms;
+the present logs do not establish which occurred during the owner's stall.
+Keep delivery/backpressure, replay ordering and A command lifecycle fixes in
+separate reviewed/tested stages. No speculative fix or backout was deployed.
+
+Further fresh MQTT capture was blocked by the approval service reporting a
+usage-limit failure; do not bypass the rejected operation through another
+network/serial route. Existing captures were drained and closed normally.
+Next diagnostic gate: approved bounded, simultaneous A UDP/B reset-free USB/
+per-bank MQTT capture with explicit phone identity and event timing. If existing
+logs still cannot distinguish receipt from notification failure, review a
+separate bounded diagnostic-instrumentation change before any deployment.
+
+09:02 owner authorized capture restart. A five-minute simultaneous capture is
+saved under `/private/tmp/jk-reconnect-capture.MrS9fl/capture.jsonl`, with Mac
+receipt timestamps and unfiltered source chunks (reassemble chunks before
+interpreting split lines). B exact Stage 2/VALID uptime advanced 3,723,690 to
+3,729,303 ms across raw USB opening; no reset. USB/MQTT and then A UDP traffic
+arrived. Owner reported TUN1 "connected and updating". B logs show disconnect
+at 3,766,649 ms, reconnect at 3,772,100 (only 5.451 s later), CCCD at 3,773,243,
+0x97 at 3,773,393, cached replay at 3,775,416; 0x96 at 3,777,084 and replay
+at 3,779,167. Both opener replays followed the existing ~2 s live-answer grace.
+A connection/disconnection counters remained 10/9 and bank-1 summaries stayed
+fresh: the real BMS link stayed held through this short phone disconnect.
+This is a successful **warm reconnect**, not a cold-link test or resolution of
+the earlier intermittent fault. Stage 5b2 remains unaccepted; captures continue.
+
+09:06 owner reported the next TUN1 reconnect was updating. This time the phone
+gap was 72.061 s (B disconnect 3,871,828 ms; reconnect 3,943,889), and A had
+actually released the BMS link: MQTT disconnect 0x216 at 09:05:39.686 and
+new connect at 09:05:51.922. B CCCD enabled at 3,944,639; 0x97 arrived at
+3,944,819 with link=reachable-idle and replay bits 0x07 were attempted at
+3,944,823, 934 ms after phone connection. The 0x96 opener followed at
+3,945,630 with link=up. A logged one transaction timeout at 09:05:55.984
+(link held), then FFE2 bootstrap at 09:05:57.201; fresh bank-1 summaries and
+conn/disc 11/10 followed without another radio disconnect in the observed
+window. This is a successful **idle-to-connected** comparison despite a startup
+transaction timeout, not proof that all opener replies were delivered or that
+the earlier failure is fixed. Do not infer replay cancellation solely from a
+missing second replay log. No deployment, reset or battery-setting changes.
+Stage 5b2 remains unaccepted pending resolution of the intermittent failures.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
