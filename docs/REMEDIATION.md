@@ -13,10 +13,11 @@ images and exact identities are in
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b1-evidence/MANIFEST.md`.
 Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false,
 conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
-Live exception: **A Stage 5b2 is deployed but unaccepted** following delayed
-phone-display failures described below. B remains Stage 2. Stage 5b2 is not
-included in the accepted recovery pair. The 09:21 checkpoint decision below
-explicitly permits isolated 6c rollout on this provisional baseline.
+Live exception: **A Stage 6c is deployed; phone/idle acceptance pending**.
+B remains Stage 2. Stage 6c explicitly inherits provisional Stage 5b2 and its
+open intermittent phone-display finding. The 09:21 delegated checkpoint
+decision below permits this isolated rollout; it does not promote 5b2 to
+full acceptance. Stage 5b1/B2 remains the accepted fallback.
 Stage 5a3 accepted at 08:14 after owner cold-session phone pass and fresh idle
 telemetry: all four links reachable-idle/app=false, conn/disc 19/19, OTA/BLE up
 at A uptime 1148–1163 s. Earlier intermittent TUN2 symptoms remain unresolved
@@ -348,6 +349,19 @@ repeat rollback drill, live fault injection or battery-setting tests. Fresh
 post-OTA phone and idle gates remain required; a new regression stops rollout.
 
 ### Resumed local work: Stage 6c before queue retention (2026-09-06)
+
+Deployment update 09:25: A-only OTA completed to ota_1, HTTP 200 in 22.362 s,
+1,212,112 bytes. Exact ELF
+`cb027b91f62e5747a1110310e7e045cf6609dbb6b931d3d35f068fa7976645b0`
+and OTA VALID verified at uptime 6131 ms; rechecked at 74,329 ms. B remains
+exact Stage 2/VALID, uptime 5,134,098 ms; no B reset or update. Boot verification
+reported all four frame-evidence checks ok at 38 s (not bank-0 hardware or
+phone-delivery acceptance). Fresh telemetry showed app=false during boot,
+OTA/BLE up, internal free heap 99,251/min95,023 at 34 s. Final quiet-idle and
+fresh read-only phone gates remain. Saved candidate/backout manifest:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage6c-app-resync/MANIFEST.md`.
+
+Local preparation history (superseded by the deployment update above):
 
 Owner requested proceeding with remediation after the captured successful warm
 and idle-to-connected TUN1 comparisons. This is not a claim that the intermittent
