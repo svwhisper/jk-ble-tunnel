@@ -120,8 +120,13 @@ Do not combine these sub-stages in one live test merely because they share a row
   state_cache.c passes deterministic checks and six threads × 25,000 iterations
   using native mutex adapters under ASAN/UBSAN and separately ThreadSanitizer;
   all prior tests pass. A firmware build passed with unchanged sdkconfig;
-  deployment and connect→idle live gate pending. Owner's 18:58 phone check
-  preceded Stage 4 deployment and confirms Stage 3 only.
+  committed as `882f2fb`. A deployed to ota_1 (HTTP 200, 1,209,232 bytes in
+  22.13 s); exact ELF
+  `120f05d8659889a09a91af6061cb84e499285a5e2fdf082fb383d5305ba75154`
+  and OTA VALID verified at uptime 6286 ms. B unchanged. Post-deployment
+  connect→idle live gate pending. Owner's earlier phone check preceded Stage 4
+  deployment and confirms Stage 3 only. Saved images and backout instructions:
+  `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage4-runtime/MANIFEST.md`.
   This does NOT change the link-up-as-frame-evidence policy (5b) or fence an
   already-queued idle disconnect against a new app session (6b). Those require
   their own stages; a state-cache lock cannot make queue actions atomic.
