@@ -100,6 +100,20 @@ successful TUN2 retry preceded this diagnostic-induced reset. Do not reopen
 this port assuming read-only means reset-free. Original transient remains
 unexplained; acceptance requires another cold TUN2 session after idle.
 
+Further owner observation: from TUN2's initially blank default Status page,
+swiping to Settings produces a populated page; returning to Status produces
+normal continuing updates without a reconnect. Treat page switching as a
+workaround, not acceptance. This points toward initial exchange/replay handling,
+but is not a captured proof of the exact lost/misordered frame. Code review
+confirms two pre-existing candidate mechanisms: A's ARB_CLEAR clears all pending
+requests including app writes (Stage 6a); B's nb_replay_action cancels all replay
+bits after dev_seen_us advances, while that timestamp is recorded on the first
+device-info chunk before notification success is checked (replay/delivery stages).
+Neither changed in Stage 5a3; added discovery latency could expose their timing.
+Do not conflate this hypothesis with a demonstrated descriptor regression or
+silently bundle the candidate fixes into Stage 5a3. B stayed exact Stage 2/VALID
+at uptime 103,908 ms after console close; no repeat USB reset observed.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;
