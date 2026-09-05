@@ -123,14 +123,26 @@ Do not combine these sub-stages in one live test merely because they share a row
   committed as `882f2fb`. A deployed to ota_1 (HTTP 200, 1,209,232 bytes in
   22.13 s); exact ELF
   `120f05d8659889a09a91af6061cb84e499285a5e2fdf082fb383d5305ba75154`
-  and OTA VALID verified at uptime 6286 ms. B unchanged. Post-deployment
-  connect→idle live gate pending. Owner's earlier phone check preceded Stage 4
-  deployment and confirms Stage 3 only. Saved images and backout instructions:
+  and OTA VALID verified at uptime 6286 ms. B unchanged. Owner's fresh
+  post-deployment phone test passed. Fresh MQTT then showed all four links
+  reachable-idle with app_connected=false; bank 3 was held during the grace
+  period, then returned idle. At uptime 215 s, connection/disconnection counts
+  were balanced at 6/6, OTA/BLE up, internal heap 99,547 (minimum 95,167).
+  **Stage 4 accepted: A Stage 4 / B Stage 2.** This is a short live soak plus
+  sanitizer stress testing, not a claim of long-duration field reliability.
+  Saved images and backout instructions:
   `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage4-runtime/MANIFEST.md`.
   This does NOT change the link-up-as-frame-evidence policy (5b) or fence an
   already-queued idle disconnect against a new app session (6b). Those require
   their own stages; a state-cache lock cannot make queue actions atomic.
 - Stages 5–12: pending; acceptance gates deliberately prevent batch deployment.
+  Stage 5a review confirms ignored discovery errors, unchecked procedure starts,
+  assumed CCCD handles and premature LINK_UP before subscription success. Its
+  isolated acceptance requires bench tests for missing service/characteristic,
+  subscription failure, disconnect during discovery and successful retry.
+  No USB test board is currently enumerated (2026-09-05 19:04); arrange an
+  isolated bench target before live deployment. No Stage 5 code or firmware
+  changes made, and no fault injection against live battery peripherals.
 
 ## Stage 2 input contract
 
