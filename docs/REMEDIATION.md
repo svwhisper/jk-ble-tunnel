@@ -211,7 +211,13 @@ New tests cover completion/timeout with a phone, attach after completion, depart
 exact grace boundary, no-phone cleanup and unchanged boot evidence/result gates.
 Full ASAN/UBSAN plus existing state/discovery TSan and 16 updater tests passed
 (`/private/tmp/jk-host-tests.ydY1eB`). A build passed with unchanged sdkconfig.
-Not deployed yet; Stage 5b1 accepted recovery pair preserved.
+Committed 70082cb; A-only OTA completed 2026-09-06 08:42 to ota_0,
+HTTP 200, 1,212,096 bytes in 21.82 s. Exact ELF
+`371b549a5c2f6b1a4f26628e4024341a47bceb947729ab768d637c0a7b8e3458`
+and OTA VALID verified at uptime 6188 ms. B unchanged. Owner asked immediately
+after verification to connect TUN2 and hold Status readings 90 s, then disconnect;
+boot/app-overlap and final idle acceptance pending. Stage 5b1 pair preserved.
+Manifest: `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b2-release/MANIFEST.md`.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
