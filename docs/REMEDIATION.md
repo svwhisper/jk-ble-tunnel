@@ -7,17 +7,21 @@ and an explicit acceptance decision before the next live deployment.
 
 ## Current checkpoint — resumed 2026-09-06
 
-Owner resumed work after the overnight pause. Last accepted pair remains
-**A Stage 5b1 / B Stage 2**; recovery
-images and exact identities are in
-`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b1-evidence/MANIFEST.md`.
+Latest checkpoint: **A Stage 6c / B Stage 2 accepted with the documented
+intermittent-display exception**, 2026-09-06 09:30. Owner's fresh TUN2 phone
+test passed; all four links then returned reachable-idle/app=false, conn/disc
+5/5 at A uptime335–350s, OTA/BLE up. Both exact identities/VALID rechecked.
+Saved pair and hashes:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage6c-app-resync/MANIFEST.md`.
+This accepts the isolated 6c change and its tested operating checkpoint; it
+does not claim the inherited intermittent display fault fixed or retroactively
+erase the failed 5b2 test. Stage 5b1/B2 remains the earlier accepted fallback.
 Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false,
 conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
-Live exception: **A Stage 6c is deployed; phone/idle acceptance pending**.
-B remains Stage 2. Stage 6c explicitly inherits provisional Stage 5b2 and its
+Live baseline: A Stage 6c explicitly inherits provisional Stage 5b2 and its
 open intermittent phone-display finding. The 09:21 delegated checkpoint
 decision below permits this isolated rollout; it does not promote 5b2 to
-full acceptance. Stage 5b1/B2 remains the accepted fallback.
+full acceptance. B remains unchanged on Stage 2.
 Stage 5a3 accepted at 08:14 after owner cold-session phone pass and fresh idle
 telemetry: all four links reachable-idle/app=false, conn/disc 19/19, OTA/BLE up
 at A uptime 1148–1163 s. Earlier intermittent TUN2 symptoms remain unresolved
@@ -349,6 +353,17 @@ repeat rollback drill, live fault injection or battery-setting tests. Fresh
 post-OTA phone and idle gates remain required; a new regression stops rollout.
 
 ### Resumed local work: Stage 6c before queue retention (2026-09-06)
+
+Acceptance update 09:30: owner answered "all good" to the requested direct
+TUN2 Status/read-only 30 s test. Exact A6c/B2 ELF/VALID rechecked at A uptime
+289,083 ms/B5,348,741 ms. Post-session TUN2 app flag was false, then normal
+idle termination 0x216 at A uptime309s; all-bank idle/app=false and conn/disc5/5
+confirmed at335–350s, OTA/BLE up, internal free heap99,315–99,507/min94,707.
+**Stage 6c accepted with inherited known-issue exception.** Saved/hash-verified
+unchanged B Stage 2 alongside A as the next recovery pair. Earlier 5b1 fallback
+and immediate 5b2 predecessor remain preserved. No further OTA, USB access or
+battery-setting changes; 6a/6b still excluded, and no claim of a long soak or
+live network fault-injection coverage. Command-session safety review is next.
 
 Deployment update 09:25: A-only OTA completed to ota_1, HTTP 200 in 22.362 s,
 1,212,112 bytes. Exact ELF
