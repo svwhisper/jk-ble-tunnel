@@ -348,6 +348,14 @@ B unchanged. Boot/phone/final idle gates pending; no repeat rollback drill,
 USB access, battery-setting writes or live fault injection. Manifest/backout:
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage6b1-idle-fence/MANIFEST.md`.
 
+Boot observation 09:57: all four frame-evidence checks ok at44s, OTA/BLE up.
+Bank3 connected and locally terminated (0x216) at38s, reconnected42s; cause not
+captured, recovery observed, not attributed to the new guard. All app flags
+false and links up at64s; internal free heap98,735/min94,227, conn/disc5/1.
+Requested direct-Status TUN2 read-only90s session across idle-release timing,
+then disconnect. Phone/final idle acceptance remains pending; do not advance
+to6b2 or6a yet. Bank0 frame evidence is not hardware acceptance.
+
 Owner requested proceeding after 6c acceptance. Red-team split: **6b1 idle
 disconnect fencing** first; **6b2 app-command/session fencing** later. Queue
 retention (6a) remains excluded and unsafe to deploy until the latter review.
