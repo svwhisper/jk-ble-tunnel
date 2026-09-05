@@ -143,6 +143,15 @@ Do not combine these sub-stages in one live test merely because they share a row
   No USB test board is currently enumerated (2026-09-05 19:04); arrange an
   isolated bench target before live deployment. No Stage 5 code or firmware
   changes made, and no fault injection against live battery peripherals.
+  Update 19:14: owner connected `/dev/cu.usbmodem101`, Espressif USB-SJ serial
+  `70:AF:09:0E:82:58`. Boot output identifies ESP32-C3 v0.4 running `app_probe`
+  version `8806d3a-dirty` (ELF prefix `639bf746b`), not the S3 `test_board`
+  build. Serial opening showed USB_UART_CHIP_RESET and RF calibration save;
+  the attempted `status` query was interpreted as survey commands (`s`),
+  confirmed against app_probe source. Surveys are finite and do not connect;
+  no session, role-change or flash command was sent. Stage 5a still needs an
+  isolated central plus BMS-emulator pair; do not retarget live Node A or
+  impersonate a real battery address to compensate for a missing spare board.
 - Stage 6a: prepared locally while Stage 5 awaits the bench. The production
   ARB_CLEAR handler previously erased all queued requests; a native test of
   the actual task loop reproduced the loss. Cleanup now removes only
