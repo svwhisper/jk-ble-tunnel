@@ -198,6 +198,21 @@ returned reachable-idle/app=false and conn/disc balanced at 10/10 for uptime
 beside accepted A as next recovery pair, with Stage 5a3 predecessor preserved.
 No new deployment or device setting changes during acceptance.
 
+Stage 5b2 local: boot verification now relinquishes demand without queuing its
+own unchecked disconnect. Normal idle maintenance is the release owner: a phone
+keeps the link, otherwise the existing 60 s grace applies. No additional requests,
+state fields, allocation, wire/NVS changes or B firmware changes. This can retain
+more links during early boot, within the existing four-link pool/controller limit.
+General stale idle-request/session fencing remains Stage 6b; removing this
+verification-specific path does not claim that separate race is fixed.
+
+Actual supervisor test reproduced old timeout-disconnect with an app attached.
+New tests cover completion/timeout with a phone, attach after completion, departure,
+exact grace boundary, no-phone cleanup and unchanged boot evidence/result gates.
+Full ASAN/UBSAN plus existing state/discovery TSan and 16 updater tests passed
+(`/private/tmp/jk-host-tests.ydY1eB`). A build passed with unchanged sdkconfig.
+Not deployed yet; Stage 5b1 accepted recovery pair preserved.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;

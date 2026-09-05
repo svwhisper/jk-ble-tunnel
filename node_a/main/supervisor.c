@@ -97,7 +97,8 @@ static uint32_t s_hold_s[CFG_NUM_UNITS];        /* current ladder rung        */
 
 /* ---- boot-verify round (quiet-idle model, 2026-08-31) ------------------- */
 /* Once per boot: bring each bank up in turn, confirm it produces frames,
- * then release it. Result JSON to jkbms/bridge/verify for the NR post-reboot
+ * then relinquish verification demand. Normal idle grace releases the link
+ * unless a phone needs it. Result JSON to jkbms/bridge/verify for the NR post-reboot
  * check. This is the ONLY internally-initiated BLE contact at idle. */
 static int     s_vfy_bank = -1;        /* -1 idle/not started, 0..N running   */
 static bool    s_vfy_done;
@@ -157,12 +158,12 @@ static void verify_tick(int64_t now)
         }
         return;                                     /* still working this bank */
     }
-    /* Bank concluded: release its link and move on. */
-    if (rt.link_held) {
-        bms_request_t d = { .bms_id = id, .kind = TXN_DISCONNECT,
-                            .source = SRC_INTERNAL };
-        arbiter_submit(&d);
-    }
+    /* Bank concluded: relinquish demand, do not queue a disconnect based on
+     * this snapshot. The phone may already own the link or attach before a
+     * queued request runs. The normal idle policy below owns release after
+     * the existing grace period; active app sessions keep their link. This
+     * removes the verification-specific teardown path, not the separate
+     * stale idle-request/session-fencing issue handled in Stage 6b. */
     s_vfy_bank++; s_vfy_start_us = now;
 }
 
