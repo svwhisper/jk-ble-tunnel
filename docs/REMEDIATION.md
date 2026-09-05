@@ -130,6 +130,14 @@ not handle these phone writes. No assistant-issued settings commands, USB
 reopen, reboot or deployment during this investigation. Stage 5a3 remains
 unaccepted; stage progression held and Stage 5a2 recovery image retained.
 
+08:06 owner confirmed the control symptom was TUN2; error no longer occurs
+and toggles now respond quickly. No intervening assistant firmware change,
+reset or battery write. Record as recovered intermittent behaviour, not a
+verified fix or proof of the final balancing state (owner did not specify
+the final setting). No further toggle tests needed. Next acceptance check is
+a read-only cold TUN2 session after disconnect/idle, opening Status directly
+without the Settings-page workaround; Stage 5a3 remains provisional.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;
