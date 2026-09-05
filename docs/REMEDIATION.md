@@ -103,8 +103,17 @@ Do not combine these sub-stages in one live test merely because they share a row
   Both firmware builds passed with unchanged sdkconfigs. 71,769 byte-exact
   reassembly assertions passed under ASAN/UBSAN (all fixed chunk sizes and
   two-chunk splits, noise, checksum failure, retained partial magic, reset),
-  alongside all Stage 2 tests. Node A deployment and live acceptance pending.
-- Stages 4–12: pending; acceptance gates deliberately prevent batch deployment.
+  alongside all Stage 2 tests. Committed as `fb57f1b`; A deployed successfully
+  to ota_0 (HTTP 200, 1,208,880 bytes in 22.32 s), exact ELF
+  `919dc075bccc6ae54f72c14aa1180994f252b44461640015cdee4ca037b94860`
+  and OTA VALID verified at uptime 6119 ms. Owner phone check passed; 86 fresh
+  bank-3 summaries and three health messages observed in 45 seconds, OTA up,
+  internal heap 99,659 bytes (minimum 95,163). **Stage 3 accepted: A Stage 3,
+  B unchanged on accepted Stage 2.** Saved pair and
+  A-only backout command are in
+  `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage3-reassembly/MANIFEST.md`.
+- Stage 4: isolated runtime-state update correction in local review/testing.
+- Stages 5–12: pending; acceptance gates deliberately prevent batch deployment.
 
 ## Stage 2 input contract
 
