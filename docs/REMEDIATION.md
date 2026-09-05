@@ -16,6 +16,8 @@ Saved pair and hashes:
 This accepts the isolated 6c change and its tested operating checkpoint; it
 does not claim the inherited intermittent display fault fixed or retroactively
 erase the failed 5b2 test. Stage 5b1/B2 remains the earlier accepted fallback.
+Live update 09:56: **A Stage 6b1 deployed and exact ELF/VALID verified; phone/
+idle acceptance pending**. B remains Stage 2, and 6c/B2 is the backout pair.
 Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false,
 conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
 Live baseline: A Stage 6c explicitly inherits provisional Stage 5b2 and its
@@ -336,6 +338,15 @@ do not accidentally restore/bundle it into a Stage 5 deployment.
 ## Categories and order
 
 ### Stage 6b split and isolated 6b1 candidate (2026-09-06)
+
+Deployment 09:56: source `3020e22`, A ota_0, HTTP 200 in 22.860347 s,
+1,212,192 bytes. Exact ELF
+`9aaad66956678f65cf0880a5e08009d1c5443598a3168005f04ef023a1c13d79`
+and OTA VALID verified at uptime 6368 ms. Preflight exact accepted A6c/B2
+identities/VALID and all-bank idle/app=false, conn/disc5/5 at1720–1750s passed.
+B unchanged. Boot/phone/final idle gates pending; no repeat rollback drill,
+USB access, battery-setting writes or live fault injection. Manifest/backout:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage6b1-idle-fence/MANIFEST.md`.
 
 Owner requested proceeding after 6c acceptance. Red-team split: **6b1 idle
 disconnect fencing** first; **6b2 app-command/session fencing** later. Queue
