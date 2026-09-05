@@ -183,6 +183,10 @@ All active ASAN/UBSAN, state/discovery TSan and updater tests pass; A build is
 and OTA VALID verified at uptime 6366 ms. Boot-round/phone/idle acceptance
 pending; B Stage 2 unchanged, Stage 5a3 recovery pair preserved. Manifest:
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b1-evidence/MANIFEST.md`.
+Fresh boot report at uptime 33 s returned all four "ok" using the new frame-only
+criterion. This does not establish bank 0 hardware health or sustained values.
+At uptime 49 s OTA/BLE up, internal free heap 99,519 (minimum 95,055),
+conn/disc 6/5; phone and final post-session idle gates remain.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
