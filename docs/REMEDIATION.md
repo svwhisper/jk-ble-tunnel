@@ -44,7 +44,7 @@ to retry; both expected accepted ELF identities/VALID then confirmed (B uptime
 59.6 s) before A-only deployment. Live phone/idle gates completed as above.
 Bench waiver remains valid; no live fault injection or battery-setting changes.
 
-Stage 5a2 (local, not yet deployed): report LINK_UP/CONNECT success only after
+Stage 5a2: report LINK_UP/CONNECT success only after
 the FFE1 CCCD write receives a successful ATT acknowledgement for that handle.
 The original early-success behaviour was reproduced in the production callback
 test. A missing/failed ACK follows the existing discovery deadline/teardown;
@@ -54,6 +54,12 @@ All prior tests plus 260 rejected callback statuses, malformed/duplicate/stale/
 missing ACK cases and 2,000 completion/ACK/deadline races per ASAN/UBSAN and TSan
 run passed. A build passed (1,210,784 bytes), unchanged sdkconfig. Stage 5a1
 accepted image is the backout point; no Stage 6a, wire or persistent-data change.
+Committed `923b721`, A deployed to ota_1 (2026-09-06 07:36, HTTP 200,
+1,210,784 bytes in 18.66 s); exact ELF
+`035805ce35589fb88a007d9e83f77892eaab923477aa24d95c01b200cff0ecdd`
+and OTA VALID verified at uptime 6192 ms. B unchanged. Fresh phone/idle gate
+pending; do not deploy Stage 5a3 yet. Image/backout manifest:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a2-subscribe/MANIFEST.md`.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
