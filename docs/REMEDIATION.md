@@ -66,8 +66,37 @@ High-risk rows are separate stages, never a single combined deployment.
   35 sanitizer-enabled protocol checks passed, both firmware targets built.
   Node B deployed successfully (HTTP 200, ota_1); exact expected ELF
   `79888f98507eb6dda5e7f20cefcef86cef087c5d67b381ee22af2a2224e0af8c`
-  and OTA VALID verified. **Awaiting owner read-only phone/app check. Node A
-  has NOT been deployed.** No later stage is accepted or deployed.
+  and OTA VALID verified; owner confirmed identities, connection and live
+  values work. Node A deployed after one preflight failure (no upload on that
+  attempt), then HTTP 200 to ota_0; expected ELF
+  `bf1f41bc74e0832f4ddcf0d291e4ba5e9abe73a9742322a6097f14f282e53f88`
+  and OTA VALID verified. Owner repeated phone check after A's boot: live values
+  normal, no new problems. **Stage 1 accepted on both nodes.** No later stage
+  is accepted or deployed.
 - Stage 1 artifacts and backout commands:
   `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage1-ota/MANIFEST.md`.
-- Stages 2–12: pending; acceptance gates deliberately prevent batch deployment.
+- Stage 2: local implementation/tests complete: 380 assertions plus 1,052,672
+  exact-buffer validator calls under ASAN/UBSAN, existing 35 protocol checks,
+  16 updater tests, and both firmware builds passed. Stage 1 saved images are
+  its backout point. Deployment and owner phone acceptance pending.
+- Stages 3–12: pending; acceptance gates deliberately prevent batch deployment.
+
+## Stage 2 input contract
+
+- MQTT balance writes: an object with exactly one setting plus optional string
+  `id` (at most 31 bytes). Only finite JSON numbers are accepted; only
+  `balancing_enabled` also accepts booleans and numeric 0/1. `cell_count` must
+  be integral. Existing whitelist/range/safety policy is unchanged.
+- MQTT commands must arrive in one complete, non-retained event, with topic
+  shorter than 64 bytes and payload shorter than 192 bytes. Fragmented,
+  oversized, embedded-NUL and empty commands are rejected before routing.
+  This suppresses broker replay; MQTT v3 live delivery of a newly retained
+  publish may have retain=false, so this is not a publisher-side retain ban.
+- App writes of 1–32 bytes pass unchanged; zero/oversized writes are rejected,
+  not truncated. Node B reports ATT errors for invalid length/queue-full when
+  the ATT operation supports a response. Write-no-response cannot report one.
+- Tunnel message IDs, exact control/TABLE sizes, index/state flags and buffer
+  bounds are validated before payload access. The byte format is unchanged.
+- Native checks: `bash tools/run_host_tests.sh`; uses installed IDF cJSON,
+  enables writes in the protocol tests, sends nothing to nodes/BMSs. Installed
+  cJSON emits macOS sprintf deprecation warnings; project test code passes.
