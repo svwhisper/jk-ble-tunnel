@@ -80,15 +80,20 @@ Do not combine these sub-stages in one live test merely because they share a row
   attempt), then HTTP 200 to ota_0; expected ELF
   `bf1f41bc74e0832f4ddcf0d291e4ba5e9abe73a9742322a6097f14f282e53f88`
   and OTA VALID verified. Owner repeated phone check after A's boot: live values
-  normal, no new problems. **Stage 1 accepted on both nodes.** No later stage
-  is accepted or deployed.
+  normal, no new problems. **Stage 1 accepted on both nodes** and saved as the
+  verified backout point for Stage 2.
 - Stage 1 artifacts and backout commands:
   `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage1-ota/MANIFEST.md`.
 - Stage 2: local implementation/tests complete: 380 assertions plus 1,052,672
   exact-buffer validator calls under ASAN/UBSAN, existing 35 protocol checks,
   16 updater tests, and both firmware builds passed. Stage 1 saved images are
   its backout point. B deployed and verified after the successful backout
-  drill; awaiting B phone check before A deployment. A remains Stage 1.
+  drill; owner confirmed B phone test passed. A then deployed to ota_1
+  (HTTP 200, 1,208,816 bytes in 21.48 s); exact ELF
+  `7663cb35b61980a46b4aac3b91fdd42325d3aac2cb840df985dff4e11ecde248`
+  and OTA VALID confirmed at uptime 6122 ms. **Both nodes now run Stage 2;
+  awaiting owner read-only phone check after A's reboot before accepting the
+  complete stage.** No Stage 3+ firmware changes have been made or deployed.
 - Stages 3–12: pending; acceptance gates deliberately prevent batch deployment.
 
 ## Stage 2 input contract
