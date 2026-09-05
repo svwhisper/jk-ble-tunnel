@@ -5,6 +5,33 @@ Baseline: `2f34ad805bc31c81da2bafd045f9da89c8cc4dc3`; working branch
 changes from another stage. Each stage gets a commit, saved binaries, tests,
 and an explicit acceptance decision before the next live deployment.
 
+## Paused for the night — 2026-09-05
+
+Owner requested pause before any further deployment. Do not resume work or OTA
+until asked. Live accepted pair remains **A Stage 4 / B Stage 2**; recovery
+images and exact identities are in
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage4-runtime/MANIFEST.md`.
+No Stage 5 or Stage 6 firmware has been deployed.
+
+Local Stage 5a1 draft handles discovery start/callback errors, missing FFE0/FFE1,
+immediate subscription-start rejection and discovery deadline expiry. It rejects
+stale generation callbacks and premature requests; failed links retain their
+slot until teardown, with rate-limited terminate retries. Successful descriptor
+assumptions/CCCD-ack policy remain unchanged for a separate Stage 5a2.
+Native tests of production callbacks/sweep/request gates pass under ASAN/UBSAN,
+alongside all previously active tests. A firmware build passed with sdkconfig
+byte-identical to baseline. This is a development checkpoint, NOT a
+deployment-ready acceptance. On resume: review callback/mutex/reentrancy and
+disconnect/reuse ordering against pinned NimBLE implementation; extend interleaving
+coverage as needed, confirm firmware build/config, then save/verify candidate
+and perform the owner-approved one-node live check. Bench waiver is recorded
+below; no live battery fault injection or settings changes are authorized.
+
+Stage 6a is excluded from this draft: commit `45b918f` remains on branch
+`resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
+`43af289` removed it from the active branch while preserving its documentation;
+do not accidentally restore/bundle it into a Stage 5 deployment.
+
 ## Categories and order
 
 Complexity/risk are implementation/change risk, not severity of the existing bug.

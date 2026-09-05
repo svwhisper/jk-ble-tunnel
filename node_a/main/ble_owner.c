@@ -42,6 +42,11 @@ typedef struct {
     jk_reasm_t reasm;
     harvest_entry_t table;    /* discovered blueprint                        */
     bool      table_ready;
+    bool      discovery_pending;
+    bool      discovery_failed; /* keep slot until LL teardown completes */
+    bool      service_seen;
+    uint32_t  discovery_cookie; /* rejects callbacks from a reused slot */
+    int64_t   terminate_retry_us;
 
     /* outstanding transaction (one per link — JK is strict req/resp) */
     bool      txn_active;
@@ -54,6 +59,7 @@ typedef struct {
 
 static link_t s_links[CFG_LINK_POOL_SIZE];
 static SemaphoreHandle_t s_mtx_link_pool;
+static uint32_t s_discovery_cookie;
 
 /* One scan/connect in flight at a time (scanning is a global radio resource).
  * The arbiter serialises per-BMS work, so this is rarely contended.
@@ -371,14 +377,62 @@ static bool ffe2_needs_write_req(const link_t *l)
           (l->ffe2_props & BLE_GATT_CHR_PROP_WRITE); }
 
 /* ---- GATT discovery callbacks (host task) ------------------------------ */
+/* Called with the link-pool mutex held. Callback args are generation tokens,
+ * not borrowed link pointers: a late result must not mutate a reused slot. */
+static link_t *discovery_link(uint16_t ch, void *arg)
+{
+    uint32_t cookie = (uint32_t)(uintptr_t)arg;
+    if (!cookie) return NULL;
+    for (int i = 0; i < CFG_LINK_POOL_SIZE; i++) {
+        link_t *l = &s_links[i];
+        if (l->in_use && l->discovery_pending && l->conn_handle == ch &&
+            l->discovery_cookie == cookie) return l;
+    }
+    return NULL;
+}
+
+static void discovery_terminate(link_t *l)
+{
+    l->terminate_retry_us = esp_timer_get_time() + 1000000LL;
+    int rc = ble_gap_terminate(l->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    /* Do not recycle a slot while its live connection still owns callbacks.
+     * Normal success/EALREADY waits for GAP DISCONNECT; transient failures
+     * retry at most once per second, never in a tight callback loop. */
+    if (rc == BLE_HS_ENOTCONN) l->in_use = false;
+    else if (rc && rc != BLE_HS_EALREADY)
+        ESP_LOGW(TAG, "bms %u discovery terminate rc=%d; retry pending", l->bms_id, rc);
+}
+
+static void discovery_fail(link_t *l, resp_status_t status, const char *step, int rc)
+{
+    if (!l->discovery_pending) return;
+    l->discovery_pending = false;
+    l->discovery_failed = true;
+    l->table_ready = false;
+    l->table.valid = false;
+    l->val_handle = l->ffe2_handle = l->cccd_handle = 0;
+    set_link_state(l->bms_id, LINK_REACHABLE_IDLE, false);
+    ESP_LOGW(TAG, "bms %u discovery failed (%s rc=%d)", l->bms_id, step, rc);
+    if (l->txn_active && l->txn.kind == TXN_CONNECT) {
+        l->txn_active = false;
+        respond(l->bms_id, l->txn.cmd_id, status, NULL, 0, JK_REC_NONE);
+    }
+    discovery_terminate(l);
+}
+
 /* NIMBLE-PASS: these signatures follow the NimBLE host API; verify the exact
  * argument structs (ble_gatt_error, ble_gatt_svc, ble_gatt_chr, ble_gatt_dsc)
  * against the pinned IDF headers. */
 static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
                        const struct ble_gatt_chr *chr, void *arg)
 {
-    link_t *l = arg;
-    if (err && err->status != 0 && err->status != BLE_HS_EDONE) return 0;
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    link_t *l = discovery_link(ch, arg);
+    if (!l) goto out;
+    if (!err || (err->status != 0 && err->status != BLE_HS_EDONE)) {
+        discovery_fail(l, RESP_GATT_ERR, "characteristics", err ? err->status : -1);
+        goto out;
+    }
     if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR2_UUID) {
         l->ffe2_handle = chr->val_handle;   /* idx-1 app writes route here */
         l->ffe2_props  = chr->properties;
@@ -390,21 +444,31 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
         /* Record the blueprint (single characteristic for JK). */
         l->table.char_count = 1;
         l->table.chars[0] = (tunnel_char_desc_t){ JK_SVC_UUID, JK_CHR_UUID, chr->properties };
-        l->table.valid = true;
-        l->table_ready = true;
     }
     if (err && err->status == BLE_HS_EDONE) {
+        if (!l->val_handle || l->val_handle == UINT16_MAX) {
+            discovery_fail(l, RESP_GATT_ERR, "missing FFE1", -1);
+            goto out;
+        }
         /* Discovery finished: subscribe to notifications (write CCCD = 0x0001).
          * Back-to-back GATT procedures are safe — NimBLE queues them (the
          * connect path already stacks MTU-exchange + svc discovery). */
         uint8_t v[2] = {0x01, 0x00};
-        if (l->cccd_handle)
-            ble_gattc_write_flat(ch, l->cccd_handle, v, sizeof(v), NULL, NULL); /* NIMBLE-PASS */
+        int rc = ble_gattc_write_flat(ch, l->cccd_handle, v, sizeof(v), NULL, NULL);
+        if (rc) {
+            discovery_fail(l, RESP_GATT_ERR, "subscribe start", rc);
+            goto out;
+        }
         /* Unit 0's module carries notify on FFE2 too — its replies may
          * surface there. Same val+1 CCCD convention; a module without that
          * descriptor just returns a harmless ATT error. */
         if (l->ffe2_handle && (l->ffe2_props & BLE_GATT_CHR_PROP_NOTIFY))
             ble_gattc_write_flat(ch, l->ffe2_handle + 1, v, sizeof(v), NULL, NULL);
+        /* Stage 5a2 will discover the actual CCCD and wait for its ATT ack.
+         * For this stage, preserve the successful subscription sequence. */
+        l->discovery_pending = false;
+        l->table.valid = true;
+        l->table_ready = true;
         set_link_state(l->bms_id, LINK_UP, true);
         /* A TXN_CONNECT completes here. */
         if (l->txn_active && l->txn.kind == TXN_CONNECT) {
@@ -412,18 +476,50 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
             respond(l->bms_id, l->txn.cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
         }
     }
+out:
+    xSemaphoreGive(s_mtx_link_pool);
     return 0;
 }
 
 static int on_svc_disc(uint16_t ch, const struct ble_gatt_error *err,
                        const struct ble_gatt_svc *svc, void *arg)
 {
-    link_t *l = arg;
-    if (svc && ble_uuid_u16(&svc->uuid.u) == JK_SVC_UUID) {
-        ble_gattc_disc_all_chrs(ch, svc->start_handle, svc->end_handle,
-                                on_chr_disc, l);                   /* NIMBLE-PASS */
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    link_t *l = discovery_link(ch, arg);
+    if (!l) goto out;
+    if (!err || (err->status != 0 && err->status != BLE_HS_EDONE)) {
+        discovery_fail(l, RESP_GATT_ERR, "service", err ? err->status : -1);
+        goto out;
     }
+    if (svc && ble_uuid_u16(&svc->uuid.u) == JK_SVC_UUID) {
+        if (l->service_seen) goto out; /* one JK service, one procedure */
+        l->service_seen = true;
+        int rc = ble_gattc_disc_all_chrs(ch, svc->start_handle, svc->end_handle,
+                                        on_chr_disc, arg);
+        if (rc) discovery_fail(l, RESP_GATT_ERR, "characteristics start", rc);
+    }
+    if (err->status == BLE_HS_EDONE && !l->service_seen)
+        discovery_fail(l, RESP_GATT_ERR, "missing FFE0", -1);
+out:
+    xSemaphoreGive(s_mtx_link_pool);
     return 0;
+}
+
+static void discovery_start(link_t *l)
+{
+    l->discovery_pending = true;
+    l->discovery_failed = false;
+    l->service_seen = false;
+    l->table_ready = false;
+    if (++s_discovery_cookie == 0) ++s_discovery_cookie;
+    l->discovery_cookie = s_discovery_cookie;
+    /* MTU is optional: failure leaves the default ATT MTU usable. */
+    int rc = ble_gattc_exchange_mtu(l->conn_handle, NULL, NULL);
+    if (rc) ESP_LOGW(TAG, "bms %u MTU start rc=%d; using current MTU", l->bms_id, rc);
+    ble_uuid16_t svc = BLE_UUID16_INIT(JK_SVC_UUID);
+    rc = ble_gattc_disc_svc_by_uuid(l->conn_handle, &svc.u, on_svc_disc,
+                                   (void *)(uintptr_t)l->discovery_cookie);
+    if (rc) discovery_fail(l, RESP_GATT_ERR, "service start", rc);
 }
 
 /* ---- notify RX + connection lifecycle ---------------------------------- */
@@ -431,6 +527,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT: {
+        xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
         link_t *l = arg;   /* link chosen in the connect call */
         /* Only the connect we believe is in flight may be adopted; anything
          * else is a stale completion whose slot was freed (and possibly
@@ -446,15 +543,13 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                          event->connect.conn_handle);
                 ble_gap_terminate(event->connect.conn_handle,
                                   BLE_ERR_REM_USER_CONN_TERM);          /* NIMBLE-PASS */
+                xSemaphoreGive(s_mtx_link_pool);
                 return 0;
             }
             s_conn_events++;   /* the number that can't lie (each = one chirp) */
             mqtt_publish_llevent("connect", l->bms_id, 0);
             l->conn_handle = event->connect.conn_handle;
-            /* Request larger MTU, then discover the JK service. */
-            ble_gattc_exchange_mtu(l->conn_handle, NULL, NULL);        /* NIMBLE-PASS */
-            ble_uuid16_t svc = BLE_UUID16_INIT(JK_SVC_UUID);
-            ble_gattc_disc_svc_by_uuid(l->conn_handle, &svc.u, on_svc_disc, l); /* NIMBLE-PASS */
+            discovery_start(l);
         } else if (expected) {
             ESP_LOGW(TAG, "connect failed bms %u st=%d", l->bms_id, event->connect.status);
             set_link_state(l->bms_id, LINK_UNREACHABLE, false);
@@ -462,9 +557,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
             l->in_use = false;
         }   /* failed AND unexpected: nothing of ours to clean up */
+        xSemaphoreGive(s_mtx_link_pool);
         return 0;
     }
     case BLE_GAP_EVENT_DISCONNECT: {
+        xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
         s_disc_events++;
         /* reason 0x08=supervision timeout, 0x13=peer terminated, 0x16=us */
         ESP_LOGW(TAG, "LL disconnect conn=%u reason=0x%02x",
@@ -478,7 +575,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             if (l->txn_active) { l->txn_active = false;
                 respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
             l->in_use = false;
+            l->discovery_pending = false;
         }
+        xSemaphoreGive(s_mtx_link_pool);
         return 0;
     }
     case BLE_GAP_EVENT_CONN_UPDATE_REQ: {
@@ -652,7 +751,11 @@ static void exec_request(const bms_request_t *req)
     link_t *l = link_by_bms(req->bms_id);
 
     if (req->kind == TXN_CONNECT) {
-        if (l && l->conn_handle) {   /* already up */
+        if (l && (l->discovery_pending || l->discovery_failed)) {
+            /* A physical connection is not a ready JK link. Keep the original
+             * connect txn intact while discovery/teardown resolves. */
+            respond(req->bms_id, req->cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
+        } else if (l && l->conn_handle) {   /* already up */
             respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
         } else if (l && (l == s_connecting || l == s_conn_inflight)) {
             /* This bank is already mid scan/connect: don't stomp its txn or
@@ -669,7 +772,7 @@ static void exec_request(const bms_request_t *req)
         xSemaphoreGive(s_mtx_link_pool); return;
     }
 
-    if (!l || !l->val_handle) {
+    if (!l || !l->table_ready || !l->val_handle) {
         respond(req->bms_id, req->cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         xSemaphoreGive(s_mtx_link_pool); return;
     }
@@ -763,7 +866,15 @@ static void sweep_timeouts(void)
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
     for (int i = 0; i < CFG_LINK_POOL_SIZE; i++) {
         link_t *l = &s_links[i];
+        if (l->in_use && l->discovery_failed && now >= l->terminate_retry_us) {
+            discovery_terminate(l);
+            continue;
+        }
         if (l->in_use && l->txn_active && now > l->txn_deadline_us) {
+            if (l->discovery_pending && l->txn.kind == TXN_CONNECT) {
+                discovery_fail(l, RESP_TIMEOUT, "deadline", -1);
+                continue;
+            }
             l->txn_active = false;
             respond(l->bms_id, l->txn.cmd_id, RESP_TIMEOUT, NULL, 0, JK_REC_NONE);
             /* NEVER terminate a healthy LL link for slow data (audio-correlated

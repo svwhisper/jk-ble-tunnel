@@ -30,5 +30,9 @@ cc -fsanitize=thread -g -Wall -Wextra -pthread -I tools/host_stubs \
    -I components/common/include -I components/jk_proto/include -I node_a/main \
    tools/host_test_state.c node_a/main/state_cache.c -o "$test_dir/state_tsan"
 "$test_dir/state_tsan"
+cc "${flags[@]}" -Wno-unused-parameter -ffunction-sections -Wl,-dead_strip \
+   -I tools/host_stubs -I node_a/main -I components/net_util/include \
+   tools/host_test_discovery.c components/jk_proto/jk_proto.c -o "$test_dir/discovery"
+"$test_dir/discovery"
 python3 -B -m unittest discover -s tools
 echo "Test executables preserved at $test_dir"
