@@ -8,9 +8,12 @@ and an explicit acceptance decision before the next live deployment.
 ## Current checkpoint — resumed 2026-09-06
 
 Owner resumed work after the overnight pause. Last accepted pair remains
-**A Stage 5a3 / B Stage 2**; recovery
+**A Stage 5b1 / B Stage 2**; recovery
 images and exact identities are in
-`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a3-descriptors/MANIFEST.md`.
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5b1-evidence/MANIFEST.md`.
+Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false,
+conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
+Stage 5b2 app-safe verification release is next and is not included in this image.
 Stage 5a3 accepted at 08:14 after owner cold-session phone pass and fresh idle
 telemetry: all four links reachable-idle/app=false, conn/disc 19/19, OTA/BLE up
 at A uptime 1148–1163 s. Earlier intermittent TUN2 symptoms remain unresolved
@@ -187,6 +190,13 @@ Fresh boot report at uptime 33 s returned all four "ok" using the new frame-only
 criterion. This does not establish bank 0 hardware health or sustained values.
 At uptime 49 s OTA/BLE up, internal free heap 99,519 (minimum 95,055),
 conn/disc 6/5; phone and final post-session idle gates remain.
+08:34 acceptance: owner TUN2 direct-Status/30 s live-values check passed with
+no reported blank screen, timeout or new beeping. After grace, all four links
+returned reachable-idle/app=false and conn/disc balanced at 10/10 for uptime
+335–365 s; OTA/BLE up, internal free heap 99,335–99,551 (minimum 94,859).
+**Stage 5b1 accepted: A Stage 5b1 / B Stage 2.** Copied/hash-verified unchanged B
+beside accepted A as next recovery pair, with Stage 5a3 predecessor preserved.
+No new deployment or device setting changes during acceptance.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
