@@ -8,9 +8,9 @@ and an explicit acceptance decision before the next live deployment.
 ## Current checkpoint — resumed 2026-09-06
 
 Owner resumed work after the overnight pause. Last accepted pair remains
-**A Stage 5a1 / B Stage 2**; recovery
+**A Stage 5a2 / B Stage 2**; recovery
 images and exact identities are in
-`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a1-reviewed/MANIFEST.md`.
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a2-subscribe/MANIFEST.md`.
 Stage 5a1 deployed to A on 2026-09-06 07:28; exact ELF
 `9b68ac3f631792d56d658cd4ae62e073277fc77446198737799a95f3765a5aca`
 and OTA VALID verified at uptime 7396 ms. HTTP 200, ota_0, 1,210,608 bytes in
@@ -57,8 +57,10 @@ accepted image is the backout point; no Stage 6a, wire or persistent-data change
 Committed `923b721`, A deployed to ota_1 (2026-09-06 07:36, HTTP 200,
 1,210,784 bytes in 18.66 s); exact ELF
 `035805ce35589fb88a007d9e83f77892eaab923477aa24d95c01b200cff0ecdd`
-and OTA VALID verified at uptime 6192 ms. B unchanged. Fresh phone/idle gate
-pending; do not deploy Stage 5a3 yet. Image/backout manifest:
+and OTA VALID verified at uptime 6192 ms. B unchanged. Owner phone test passed;
+fresh telemetry confirmed bank 3 returned idle, all app flags false, conn/disc
+8/8 at uptime 215–230 s, OTA/BLE up, internal heap 99,543 (minimum 94,571).
+**Stage 5a2 accepted.** Image/backout manifest:
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a2-subscribe/MANIFEST.md`.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
