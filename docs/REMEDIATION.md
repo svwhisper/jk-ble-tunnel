@@ -236,6 +236,10 @@ progress. Earlier TUN2 transient behaviour predates 5b2, so neither new release
 policy causation nor a particular queue/replay fault is proven. Delayed initial
 exchange is a hypothesis, not a diagnosed fix. No further live control toggles,
 USB console access or fault injection requested.
+Subsequent fresh telemetry at uptime 215–230 s confirmed all four links idle/
+app=false, conn/disc 7/7, OTA/BLE up, internal free heap 99,295–99,503 (minimum
+94,523). Idle release gate passed, but delayed initial phone display remains
+an acceptance failure; do not promote 5b2 merely because it later recovered.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
