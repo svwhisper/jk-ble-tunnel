@@ -41,8 +41,19 @@ GATT-error-before-disconnect ordering. All active tests and final A build pass
 (1,210,608 bytes, unchanged sdkconfig). Live acceptance pending; preflight
 verified A Stage 4/VALID but B initially did not answer at .234. Owner asked
 to retry; both expected accepted ELF identities/VALID then confirmed (B uptime
-59.6 s) before A-only deployment. Live phone gate remains pending.
+59.6 s) before A-only deployment. Live phone/idle gates completed as above.
 Bench waiver remains valid; no live fault injection or battery-setting changes.
+
+Stage 5a2 (local, not yet deployed): report LINK_UP/CONNECT success only after
+the FFE1 CCCD write receives a successful ATT acknowledgement for that handle.
+The original early-success behaviour was reproduced in the production callback
+test. A missing/failed ACK follows the existing discovery deadline/teardown;
+duplicate and stale callbacks cannot revive a failed session. Optional FFE2
+subscription remains best-effort; CCCD address assumptions remain for Stage 5a3.
+All prior tests plus 260 rejected callback statuses, malformed/duplicate/stale/
+missing ACK cases and 2,000 completion/ACK/deadline races per ASAN/UBSAN and TSan
+run passed. A build passed (1,210,784 bytes), unchanged sdkconfig. Stage 5a1
+accepted image is the backout point; no Stage 6a, wire or persistent-data change.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert

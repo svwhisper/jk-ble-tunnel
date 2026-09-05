@@ -43,6 +43,7 @@ typedef struct {
     harvest_entry_t table;    /* discovered blueprint                        */
     bool      table_ready;
     bool      discovery_pending;
+    bool      subscription_pending;
     bool      discovery_failed; /* keep slot until LL teardown completes */
     bool      service_seen;
     uint32_t  discovery_cookie; /* rejects callbacks from a reused slot */
@@ -411,6 +412,7 @@ static void discovery_fail(link_t *l, resp_status_t status, const char *step, in
 {
     if (!l->discovery_pending) return;
     l->discovery_pending = false;
+    l->subscription_pending = false;
     l->discovery_failed = true;
     l->table_ready = false;
     l->table.valid = false;
@@ -424,6 +426,30 @@ static void discovery_fail(link_t *l, resp_status_t status, const char *step, in
     discovery_terminate(l);
 }
 
+static int on_subscribe_done(uint16_t ch, const struct ble_gatt_error *err,
+                             struct ble_gatt_attr *attr, void *arg)
+{
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    link_t *l = discovery_link(ch, arg);
+    if (!l || !l->subscription_pending) goto out;
+    if (!err || err->status != 0 || !attr || attr->handle != l->cccd_handle) {
+        discovery_fail(l, RESP_GATT_ERR, "subscribe ack", err ? err->status : -1);
+        goto out;
+    }
+    l->subscription_pending = false;
+    l->discovery_pending = false;
+    l->table.valid = true;
+    l->table_ready = true;
+    set_link_state(l->bms_id, LINK_UP, true);
+    if (l->txn_active && l->txn.kind == TXN_CONNECT) {
+        l->txn_active = false;
+        respond(l->bms_id, l->txn.cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
+    }
+out:
+    xSemaphoreGive(s_mtx_link_pool);
+    return 0;
+}
+
 /* NIMBLE-PASS: these signatures follow the NimBLE host API; verify the exact
  * argument structs (ble_gatt_error, ble_gatt_svc, ble_gatt_chr, ble_gatt_dsc)
  * against the pinned IDF headers. */
@@ -432,7 +458,7 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
 {
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
     link_t *l = discovery_link(ch, arg);
-    if (!l) goto out;
+    if (!l || l->subscription_pending) goto out;
     if (!err || (err->status != 0 && err->status != BLE_HS_EDONE)) {
         discovery_fail(l, RESP_GATT_ERR, "characteristics", err ? err->status : -1);
         goto out;
@@ -458,7 +484,9 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
          * Back-to-back GATT procedures are safe — NimBLE queues them (the
          * connect path already stacks MTU-exchange + svc discovery). */
         uint8_t v[2] = {0x01, 0x00};
-        int rc = ble_gattc_write_flat(ch, l->cccd_handle, v, sizeof(v), NULL, NULL);
+        l->subscription_pending = true;
+        int rc = ble_gattc_write_flat(ch, l->cccd_handle, v, sizeof(v),
+                                      on_subscribe_done, arg);
         if (rc) {
             discovery_fail(l, RESP_GATT_ERR, "subscribe start", rc);
             goto out;
@@ -468,17 +496,9 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
          * descriptor just returns a harmless ATT error. */
         if (l->ffe2_handle && (l->ffe2_props & BLE_GATT_CHR_PROP_NOTIFY))
             ble_gattc_write_flat(ch, l->ffe2_handle + 1, v, sizeof(v), NULL, NULL);
-        /* Stage 5a2 will discover the actual CCCD and wait for its ATT ack.
-         * For this stage, preserve the successful subscription sequence. */
-        l->discovery_pending = false;
-        l->table.valid = true;
-        l->table_ready = true;
-        set_link_state(l->bms_id, LINK_UP, true);
-        /* A TXN_CONNECT completes here. */
-        if (l->txn_active && l->txn.kind == TXN_CONNECT) {
-            l->txn_active = false;
-            respond(l->bms_id, l->txn.cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
-        }
+        /* FFE1 acknowledgement completes CONNECT; the existing transaction
+         * deadline also bounds a missing ack. FFE2 remains optional, with
+         * descriptor discovery intentionally deferred to Stage 5a3. */
     }
 out:
     xSemaphoreGive(s_mtx_link_pool);
@@ -512,6 +532,7 @@ out:
 static void discovery_start(link_t *l)
 {
     l->discovery_pending = true;
+    l->subscription_pending = false;
     l->discovery_failed = false;
     l->service_seen = false;
     l->table_ready = false;
@@ -583,6 +604,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
             l->in_use = false;
             l->discovery_pending = false;
+            l->subscription_pending = false;
         }
         xSemaphoreGive(s_mtx_link_pool);
         mqtt_publish_llevent("disconnect", disconnected_id, event->disconnect.reason);
