@@ -19,6 +19,11 @@ static ble_gatt_disc_svc_fn *svc_cb;
 static ble_gatt_chr_fn *chr_cb;
 static ble_gatt_attr_fn *write_cb;
 static void *write_arg;
+static ble_gatt_dsc_fn *dsc_cb;
+static void *dsc_arg;
+static uint16_t dsc_start, dsc_end, written_handle, optional_written_handle;
+static unsigned dsc_calls;
+static int dsc_rc, optional_dsc_rc;
 static const struct ble_gatt_error ok = {0}, done = { .status = BLE_HS_EDONE },
                                    error = { .status = 5 };
 int64_t esp_timer_get_time(void) { return test_now; }
@@ -39,10 +44,17 @@ int ble_gattc_disc_svc_by_uuid(uint16_t ch, const ble_uuid_t *uuid, ble_gatt_dis
 { (void)ch; assert(ble_uuid_u16(uuid) == JK_SVC_UUID); svc_calls++; svc_cb = cb; svc_arg = arg; return svc_rc; }
 int ble_gattc_disc_all_chrs(uint16_t ch, uint16_t start, uint16_t end, ble_gatt_chr_fn *cb, void *arg)
 { (void)ch; assert(start == 1 && end == 30); chr_calls++; chr_cb = cb; chr_arg = arg; return chr_rc; }
+int ble_gattc_disc_all_dscs(uint16_t ch, uint16_t start, uint16_t end, ble_gatt_dsc_fn *cb, void *arg)
+{
+    (void)ch; assert(start < end);
+    dsc_calls++; dsc_start = start; dsc_end = end; dsc_cb = cb; dsc_arg = arg;
+    return start == 20 ? optional_dsc_rc : dsc_rc;
+}
 int ble_gattc_write_flat(uint16_t ch, uint16_t handle, const void *value, uint16_t len, ble_gatt_attr_fn *cb, void *arg)
 {
     (void)ch; (void)handle; (void)value; (void)len;
-    if (cb) { write_cb = cb; write_arg = arg; }
+    if (cb) { write_cb = cb; write_arg = arg; written_handle = handle; }
+    else optional_written_handle = handle;
     write_calls++; return handle == 21 ? optional_write_rc : write_rc;
 }
 int ble_gattc_write_no_rsp_flat(uint16_t ch, uint16_t h, const void *v, uint16_t n)
@@ -75,6 +87,8 @@ static link_t *setup(uint16_t ch)
     svc_rc = chr_rc = write_rc = optional_write_rc = mtu_rc = terminate_rc = 0;
     svc_calls = chr_calls = write_calls = terminate_calls = responses = state_calls = 0;
     write_cb = NULL; write_arg = NULL;
+    dsc_cb = NULL; dsc_arg = NULL; dsc_calls = 0;
+    dsc_rc = optional_dsc_rc = 0; written_handle = optional_written_handle = 0;
     last_held = false; last_state = LINK_REACHABLE_IDLE;
     test_now = 1000000;
     link_t *l = link_alloc(1);
@@ -99,7 +113,7 @@ static void service(link_t *l)
 }
 static void characteristic(link_t *l, uint16_t uuid, uint16_t handle)
 {
-    struct ble_gatt_chr c = { .val_handle = handle,
+    struct ble_gatt_chr c = { .def_handle = handle - 1, .val_handle = handle,
         .properties = BLE_GATT_CHR_PROP_WRITE | BLE_GATT_CHR_PROP_NOTIFY,
         .uuid.u16 = BLE_UUID16_INIT(uuid) };
     chr_cb(l->conn_handle, &ok, &c, chr_arg);
@@ -111,19 +125,36 @@ static void failed(link_t *l, resp_status_t status)
     assert(responses == 1 && last_response.cmd_id == 42 && last_response.status == status);
     assert(terminate_calls == 1);
 }
+static void descriptor(uint16_t ch, uint16_t value, uint16_t handle, uint16_t uuid, void *arg)
+{
+    struct ble_gatt_dsc d = { .handle = handle, .uuid.u16 = BLE_UUID16_INIT(uuid) };
+    dsc_cb(ch, &ok, value, &d, arg);
+}
+static void finish_characteristics(link_t *l)
+{
+    chr_cb(l->conn_handle, &done, NULL, chr_arg);
+    /* Default emulator layout. Dedicated cases below drive non-adjacent and
+     * missing descriptors directly through the captured production callback. */
+    for (unsigned i = 0; i < 2 && dsc_cb && !write_cb; i++) {
+        uint16_t value = dsc_start;
+        void *arg = dsc_arg;
+        descriptor(l->conn_handle, value, value + 1, 0x2902, arg);
+        dsc_cb(l->conn_handle, &done, value, NULL, arg);
+    }
+}
 static void *complete_worker(void *arg)
 {
     link_t *l = arg;
-    chr_cb(l->conn_handle, &done, NULL, chr_arg);
+    finish_characteristics(l);
     if (write_cb) {
-        struct ble_gatt_attr attr = { .handle = 11 };
+        struct ble_gatt_attr attr = { .handle = written_handle };
         write_cb(l->conn_handle, &ok, &attr, write_arg);
     }
     return NULL;
 }
 static void ack(link_t *l)
 {
-    struct ble_gatt_attr attr = { .handle = 11 };
+    struct ble_gatt_attr attr = { .handle = written_handle };
     assert(write_cb);
     write_cb(l->conn_handle, &ok, &attr, write_arg);
 }
@@ -139,11 +170,11 @@ int main(void)
     l = setup(7); start(l); svc_cb(7, &done, NULL, svc_arg); failed(l, RESP_GATT_ERR);
     l = setup(7); start(l); chr_rc = 6; service(l); failed(l, RESP_GATT_ERR);
     l = setup(7); start(l); service(l); chr_cb(7, &error, NULL, chr_arg); failed(l, RESP_GATT_ERR);
-    l = setup(7); start(l); service(l); chr_cb(7, &done, NULL, chr_arg); failed(l, RESP_GATT_ERR);
+    l = setup(7); start(l); service(l); finish_characteristics(l); failed(l, RESP_GATT_ERR);
     l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, UINT16_MAX);
-    chr_cb(7, &done, NULL, chr_arg); failed(l, RESP_GATT_ERR);
+    finish_characteristics(l); failed(l, RESP_GATT_ERR);
     l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10); write_rc = 6;
-    chr_cb(7, &done, NULL, chr_arg); failed(l, RESP_GATT_ERR);
+    finish_characteristics(l); failed(l, RESP_GATT_ERR);
 
     /* Normal discovery (including optional FFE2) remains one successful txn.
      * Duplicate and stale procedure completions must not resubscribe/respond. */
@@ -154,16 +185,16 @@ int main(void)
         characteristic(l, JK_CHR_UUID, 10);
         assert(!l->table_ready && responses == 0);
         if (extra) { characteristic(l, JK_CHR2_UUID, 20); optional_write_rc = 5; }
-        chr_cb(7, &done, NULL, chr_arg);
+        finish_characteristics(l);
         assert(!l->table_ready && !last_held && responses == 0);
         assert(write_cb && write_calls == 1 + extra);
-        chr_cb(7, &done, NULL, chr_arg); /* duplicate before ack must do nothing */
+        finish_characteristics(l); /* duplicate before ack must do nothing */
         assert(write_calls == 1 + extra && responses == 0);
         ack(l);
         ack(l); /* duplicate acknowledgement must not produce a second result */
         assert(l->table_ready && !l->discovery_pending && last_held && last_state == LINK_UP);
         assert(responses == 1 && last_response.status == RESP_OK && write_calls == 1 + extra);
-        chr_cb(7, &done, NULL, chr_arg); svc_cb(7, &error, NULL, svc_arg);
+        finish_characteristics(l); svc_cb(7, &error, NULL, svc_arg);
         assert(responses == 1 && terminate_calls == 0 && write_calls == 1 + extra);
     }
 
@@ -199,7 +230,7 @@ int main(void)
     assert(last_response.cmd_id == 77 && last_response.status == RESP_LINK_DOWN && l->txn.cmd_id == 42);
     req.kind = TXN_POLL; exec_request(&req);
     assert(last_response.status == RESP_LINK_DOWN && write_calls == 0 && l->txn.cmd_id == 42);
-    responses = 0; chr_cb(7, &done, NULL, chr_arg); ack(l);
+    responses = 0; finish_characteristics(l); ack(l);
     assert(last_response.cmd_id == 42 && last_response.status == RESP_OK);
     l->txn_active = true; l->txn.kind = TXN_POLL; test_now = l->txn_deadline_us + 1;
     sweep_timeouts(); assert(terminate_calls == 0 && l->table_ready && l->timeout_strikes == 1);
@@ -220,7 +251,7 @@ int main(void)
     assert(!l->in_use && scanning->in_use && responses == 1);
 
     l = setup(0); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
-    chr_cb(0, &done, NULL, chr_arg); ack(l);
+    finish_characteristics(l); ack(l);
     responses = 0; req.kind = TXN_CONNECT; exec_request(&req);
     assert(responses == 1 && last_response.status == RESP_OK && svc_calls == 1);
 
@@ -229,27 +260,123 @@ int main(void)
     struct ble_gatt_attr sub_attr = { .handle = 11 };
     for (unsigned status = 1; status <= 260; status++) {
         l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
-        chr_cb(7, &done, NULL, chr_arg);
+        finish_characteristics(l);
         struct ble_gatt_error rejected = { .status = status };
         write_cb(7, &rejected, &sub_attr, write_arg); failed(l, RESP_GATT_ERR);
         ack(l); assert(responses == 1 && !last_held);
     }
     for (unsigned malformed = 0; malformed < 3; malformed++) {
         l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
-        chr_cb(7, &done, NULL, chr_arg);
+        finish_characteristics(l);
         struct ble_gatt_attr wrong = { .handle = 12 };
         write_cb(7, malformed == 0 ? NULL : &ok,
                  malformed == 1 ? NULL : &wrong, write_arg);
         failed(l, RESP_GATT_ERR);
     }
     l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
-    chr_cb(7, &done, NULL, chr_arg);
+    finish_characteristics(l);
     old_arg = write_arg;
     test_now = l->txn_deadline_us + 1; sweep_timeouts(); failed(l, RESP_TIMEOUT);
     ack(l); assert(responses == 1 && !last_held);
-    lost.disconnect.conn.conn_handle = 7; gap_event(&lost, l);
+
+    /* Real descriptor handles, not value+1. Never cross the next declaration.
+     * Primary value 10 ends at 18; secondary value 20 ends at service end 30. */
+    l = setup(7); start(l); service(l);
+    characteristic(l, JK_CHR_UUID, 10); characteristic(l, JK_CHR2_UUID, 20);
+    chr_cb(7, &done, NULL, chr_arg);
+    assert(dsc_start == 10 && dsc_end == 18 && write_calls == 0);
+    descriptor(7, 10, 11, 0x2901, dsc_arg); /* user description, not CCCD */
+    assert(l->cccd_handle == 0);
+    descriptor(7, 10, 15, 0x2902, dsc_arg);
+    dsc_cb(7, &done, 10, NULL, dsc_arg);
+    assert(dsc_start == 20 && dsc_end == 30 && write_calls == 0);
+    descriptor(7, 10, 16, 0x2902, dsc_arg); /* stale primary-phase result */
+    descriptor(7, 20, 25, 0x2902, dsc_arg);
+    dsc_cb(7, &done, 20, NULL, dsc_arg);
+    assert(written_handle == 15 && optional_written_handle == 25 && write_calls == 2);
+    ack(l); assert(last_held && responses == 1);
+    /* Declaration order may be FFE2 then FFE1; lookup still follows UUID,
+     * with each descriptor search bounded by that characteristic's end. */
+    l = setup(7); start(l); service(l);
+    characteristic(l, JK_CHR2_UUID, 10); characteristic(l, JK_CHR_UUID, 20);
+    chr_cb(7, &done, NULL, chr_arg); assert(dsc_start == 20 && dsc_end == 30);
+    descriptor(7, 20, 25, 0x2902, dsc_arg); dsc_cb(7, &done, 20, NULL, dsc_arg);
+    assert(dsc_start == 10 && dsc_end == 18);
+    descriptor(7, 10, 15, 0x2902, dsc_arg); dsc_cb(7, &done, 10, NULL, dsc_arg);
+    assert(written_handle == 25 && optional_written_handle == 15);
+    ack(l); assert(last_held && responses == 1);
+
+    for (unsigned handle = 11; handle <= 30; handle++) {
+        l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+        chr_cb(7, &done, NULL, chr_arg);
+        descriptor(7, 10, handle, 0x2902, dsc_arg);
+        descriptor(7, 10, handle, 0x2902, dsc_arg); /* identical replay */
+        assert(write_calls == 0);
+        dsc_cb(7, &done, 10, NULL, dsc_arg);
+        assert(written_handle == handle && write_calls == 1);
+        ack(l); assert(responses == 1 && last_held);
+    }
+    const uint16_t bad_handles[] = {0, 10, 14, 31, UINT16_MAX};
+    l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+    characteristic(l, 0x1234, 11); /* declaration overlaps previous value */
+    failed(l, RESP_GATT_ERR); assert(write_calls == 0);
+    for (unsigned i = 0; i < sizeof(bad_handles) / sizeof(bad_handles[0]); i++) {
+        l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+        characteristic(l, 0x1234, 15); /* unrelated declaration at 14 */
+        chr_cb(7, &done, NULL, chr_arg); assert(dsc_end == 13);
+        descriptor(7, 10, bad_handles[i], 0x2902, dsc_arg);
+        failed(l, RESP_GATT_ERR); assert(write_calls == 0);
+    }
+    l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+    characteristic(l, 0x1234, 12); /* no descriptor space before next char */
+    chr_cb(7, &done, NULL, chr_arg); failed(l, RESP_GATT_ERR); assert(dsc_calls == 0);
+    for (unsigned failure = 0; failure < 5; failure++) {
+        l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+        if (failure == 0) dsc_rc = 6;
+        chr_cb(7, &done, NULL, chr_arg);
+        if (failure == 1) dsc_cb(7, &error, 10, NULL, dsc_arg);
+        if (failure == 2) dsc_cb(7, &done, 10, NULL, dsc_arg); /* missing */
+        if (failure == 3) dsc_cb(7, NULL, 10, NULL, dsc_arg);
+        if (failure == 4) {
+            descriptor(7, 10, 11, 0x2902, dsc_arg);
+            descriptor(7, 10, 12, 0x2902, dsc_arg); /* ambiguous duplicate */
+        }
+        failed(l, RESP_GATT_ERR); assert(write_calls == 0);
+    }
+    for (unsigned optional_failure = 0; optional_failure < 3; optional_failure++) {
+        l = setup(7); start(l); service(l);
+        characteristic(l, JK_CHR_UUID, 10); characteristic(l, JK_CHR2_UUID, 20);
+        if (optional_failure == 0) optional_dsc_rc = 6;
+        chr_cb(7, &done, NULL, chr_arg);
+        descriptor(7, 10, 15, 0x2902, dsc_arg);
+        dsc_cb(7, &done, 10, NULL, dsc_arg);
+        if (optional_failure == 1) dsc_cb(7, &error, 20, NULL, dsc_arg);
+        if (optional_failure == 2) dsc_cb(7, &done, 20, NULL, dsc_arg);
+        assert(write_calls == 1 && written_handle == 15 && optional_written_handle == 0);
+        ack(l); assert(last_held && responses == 1);
+    }
+    l = setup(7); start(l); service(l);
+    characteristic(l, JK_CHR_UUID, 10); characteristic(l, JK_CHR2_UUID, 20);
+    optional_dsc_rc = BLE_HS_ENOTCONN;
+    chr_cb(7, &done, NULL, chr_arg);
+    descriptor(7, 10, 15, 0x2902, dsc_arg);
+    dsc_cb(7, &done, 10, NULL, dsc_arg);
+    failed(l, RESP_GATT_ERR); assert(write_calls == 0);
+    l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+    chr_cb(7, &done, NULL, chr_arg); old_arg = dsc_arg;
+    test_now = l->txn_deadline_us + 1; sweep_timeouts(); failed(l, RESP_TIMEOUT);
+    descriptor(7, 10, 11, 0x2902, old_arg); assert(write_calls == 0);
+    gap_event(&lost, l);
     l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
     chr_cb(7, &done, NULL, chr_arg);
+    dsc_cb(7, &error, 10, NULL, old_arg); assert(responses == 0);
+    descriptor(7, 999, 11, 0x2902, dsc_arg); assert(l->cccd_handle == 0);
+    descriptor(7, 10, 11, 0x2902, dsc_arg);
+    dsc_cb(7, &done, 10, NULL, dsc_arg); ack(l);
+    assert(responses == 1 && last_held);
+    lost.disconnect.conn.conn_handle = 7; gap_event(&lost, l);
+    l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+    finish_characteristics(l);
     write_cb(7, &ok, &sub_attr, old_arg); assert(responses == 0 && !l->table_ready);
     write_cb(99, &ok, &sub_attr, write_arg); assert(responses == 0);
     req.kind = TXN_POLL; exec_request(&req);
@@ -263,7 +390,7 @@ int main(void)
     for (unsigned phase = 0; phase < 2; phase++)
     for (unsigned i = 0; i < 1000; i++) {
         l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
-        if (phase) chr_cb(7, &done, NULL, chr_arg); /* race while waiting for ACK */
+        if (phase) finish_characteristics(l); /* race while waiting for ACK */
         test_now = l->txn_deadline_us + 1;
         pthread_t a, b;
         assert(pthread_create(&a, NULL, i & 1 ? complete_worker : timeout_worker, l) == 0);
@@ -277,5 +404,6 @@ int main(void)
     puts("PASS: production discovery callbacks, errors/deadlines/retry/stale-generation/request gates");
     puts("PASS: 2000 concurrent discovery/ACK/deadline races; disconnect ordering and handle-0 isolation");
     puts("PASS: subscription ACK gating, 260 rejected statuses, malformed/duplicate/stale/missing ACKs");
+    puts("PASS: discovered CCCD handles/ranges, optional fallback, missing/error/stale descriptor callbacks");
     return 0;
 }

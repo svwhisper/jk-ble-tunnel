@@ -29,6 +29,7 @@
 #include "host/util/util.h"
 
 static const char *TAG = "ble_owner";
+enum { DSC_NONE, DSC_FFE1, DSC_FFE2, DSC_DONE };
 
 typedef struct {
     bool      in_use;
@@ -37,6 +38,9 @@ typedef struct {
     uint16_t  val_handle;     /* 0xFFE1 value handle                          */
     uint16_t  ffe2_handle;    /* 0xFFE2 value handle (0 if absent)            */
     uint16_t  cccd_handle;    /* 0xFFE1 CCCD                                  */
+    uint16_t  ffe2_cccd_handle;
+    uint16_t  service_end, ffe1_end, ffe2_end, last_chr_value;
+    uint8_t   descriptor_phase;
     uint8_t   ffe1_props;     /* discovered char properties — pick the ATT   */
     uint8_t   ffe2_props;     /*   write op each char actually permits        */
     jk_reasm_t reasm;
@@ -416,7 +420,7 @@ static void discovery_fail(link_t *l, resp_status_t status, const char *step, in
     l->discovery_failed = true;
     l->table_ready = false;
     l->table.valid = false;
-    l->val_handle = l->ffe2_handle = l->cccd_handle = 0;
+    l->val_handle = l->ffe2_handle = l->cccd_handle = l->ffe2_cccd_handle = 0;
     set_link_state(l->bms_id, LINK_REACHABLE_IDLE, false);
     ESP_LOGW(TAG, "bms %u discovery failed (%s rc=%d)", l->bms_id, step, rc);
     if (l->txn_active && l->txn.kind == TXN_CONNECT) {
@@ -450,6 +454,81 @@ out:
     return 0;
 }
 
+/* All discovery helpers below run under the link-pool mutex. */
+static void subscription_start(link_t *l)
+{
+    uint8_t v[2] = {0x01, 0x00};
+    l->descriptor_phase = DSC_DONE;
+    l->subscription_pending = true;
+    int rc = ble_gattc_write_flat(l->conn_handle, l->cccd_handle, v, sizeof(v),
+                                  on_subscribe_done, (void *)(uintptr_t)l->discovery_cookie);
+    if (rc) {
+        discovery_fail(l, RESP_GATT_ERR, "subscribe start", rc);
+        return;
+    }
+    /* FFE2 is optional, but never guess an address and write another attr. */
+    if (l->ffe2_cccd_handle)
+        ble_gattc_write_flat(l->conn_handle, l->ffe2_cccd_handle, v, sizeof(v), NULL, NULL);
+}
+
+static int on_dsc_disc(uint16_t ch, const struct ble_gatt_error *err,
+                       uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg);
+
+static void secondary_descriptors_or_subscribe(link_t *l)
+{
+    if (l->ffe2_handle && (l->ffe2_props & BLE_GATT_CHR_PROP_NOTIFY) &&
+        l->ffe2_end > l->ffe2_handle) {
+        l->descriptor_phase = DSC_FFE2;
+        int rc = ble_gattc_disc_all_dscs(l->conn_handle, l->ffe2_handle, l->ffe2_end,
+                                        on_dsc_disc, (void *)(uintptr_t)l->discovery_cookie);
+        if (!rc) return;
+        if (rc == BLE_HS_ENOTCONN) {
+            discovery_fail(l, RESP_GATT_ERR, "FFE2 descriptor link lost", rc);
+            return;
+        }
+        ESP_LOGW(TAG, "bms %u optional FFE2 descriptor start rc=%d", l->bms_id, rc);
+    }
+    subscription_start(l);
+}
+
+static int on_dsc_disc(uint16_t ch, const struct ble_gatt_error *err,
+                       uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
+{
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    link_t *l = discovery_link(ch, arg);
+    if (!l || (l->descriptor_phase != DSC_FFE1 && l->descriptor_phase != DSC_FFE2)) goto out;
+    bool primary = l->descriptor_phase == DSC_FFE1;
+    uint16_t value = primary ? l->val_handle : l->ffe2_handle;
+    uint16_t end = primary ? l->ffe1_end : l->ffe2_end;
+    uint16_t *cccd = primary ? &l->cccd_handle : &l->ffe2_cccd_handle;
+    if (chr_val_handle != value) goto out; /* delayed callback from prior phase */
+    if (!err || (err->status != 0 && err->status != BLE_HS_EDONE)) {
+        if (primary || !err || err->status == BLE_HS_ENOTCONN) {
+            discovery_fail(l, RESP_GATT_ERR, "descriptors", err ? err->status : -1);
+        } else {
+            *cccd = 0; /* ignore incomplete optional discovery */
+            ESP_LOGW(TAG, "bms %u optional FFE2 descriptors rc=%d", l->bms_id, err->status);
+            subscription_start(l);
+        }
+        goto out;
+    }
+    if (dsc && ble_uuid_u16(&dsc->uuid.u) == 0x2902) {
+        if (dsc->handle <= value || dsc->handle > end || (*cccd && *cccd != dsc->handle)) {
+            discovery_fail(l, RESP_GATT_ERR, "invalid CCCD range/duplicate", -1);
+            goto out;
+        }
+        *cccd = dsc->handle;
+    }
+    if (err->status == BLE_HS_EDONE) {
+        if (primary && !*cccd) discovery_fail(l, RESP_GATT_ERR, "missing FFE1 CCCD", -1);
+        else if (primary) secondary_descriptors_or_subscribe(l);
+        else subscription_start(l);
+    }
+out:
+    xSemaphoreGive(s_mtx_link_pool);
+    return 0;
+}
+
 /* NIMBLE-PASS: these signatures follow the NimBLE host API; verify the exact
  * argument structs (ble_gatt_error, ble_gatt_svc, ble_gatt_chr, ble_gatt_dsc)
  * against the pinned IDF headers. */
@@ -458,47 +537,47 @@ static int on_chr_disc(uint16_t ch, const struct ble_gatt_error *err,
 {
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
     link_t *l = discovery_link(ch, arg);
-    if (!l || l->subscription_pending) goto out;
+    if (!l || l->descriptor_phase != DSC_NONE) goto out;
     if (!err || (err->status != 0 && err->status != BLE_HS_EDONE)) {
         discovery_fail(l, RESP_GATT_ERR, "characteristics", err ? err->status : -1);
         goto out;
     }
+    if (chr) {
+        /* ATT discovery is ordered by declaration handle. The next declaration
+         * ends the previous characteristic's descriptor range, even for UUIDs
+         * we do not otherwise use. Never search into a neighbouring char. */
+        if (chr->def_handle <= l->last_chr_value || chr->val_handle <= chr->def_handle ||
+            chr->val_handle > l->service_end) {
+            discovery_fail(l, RESP_GATT_ERR, "characteristic range/order", -1);
+            goto out;
+        }
+        l->last_chr_value = chr->val_handle;
+        if (l->val_handle && chr->def_handle > l->val_handle && chr->def_handle <= l->ffe1_end)
+            l->ffe1_end = chr->def_handle - 1;
+        if (l->ffe2_handle && chr->def_handle > l->ffe2_handle && chr->def_handle <= l->ffe2_end)
+            l->ffe2_end = chr->def_handle - 1;
+    }
     if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR2_UUID) {
         l->ffe2_handle = chr->val_handle;   /* idx-1 app writes route here */
         l->ffe2_props  = chr->properties;
+        l->ffe2_end = l->service_end;
     }
     if (chr && ble_uuid_u16(&chr->uuid.u) == JK_CHR_UUID) {
         l->val_handle  = chr->val_handle;
         l->ffe1_props  = chr->properties;
-        l->cccd_handle = chr->val_handle + 1;   /* CCCD is typically val+1    */
+        l->ffe1_end = l->service_end;
         /* Record the blueprint (single characteristic for JK). */
         l->table.char_count = 1;
         l->table.chars[0] = (tunnel_char_desc_t){ JK_SVC_UUID, JK_CHR_UUID, chr->properties };
     }
     if (err && err->status == BLE_HS_EDONE) {
-        if (!l->val_handle || l->val_handle == UINT16_MAX) {
-            discovery_fail(l, RESP_GATT_ERR, "missing FFE1", -1);
+        if (!l->val_handle || l->ffe1_end <= l->val_handle) {
+            discovery_fail(l, RESP_GATT_ERR, "missing FFE1/descriptor range", -1);
             goto out;
         }
-        /* Discovery finished: subscribe to notifications (write CCCD = 0x0001).
-         * Back-to-back GATT procedures are safe — NimBLE queues them (the
-         * connect path already stacks MTU-exchange + svc discovery). */
-        uint8_t v[2] = {0x01, 0x00};
-        l->subscription_pending = true;
-        int rc = ble_gattc_write_flat(ch, l->cccd_handle, v, sizeof(v),
-                                      on_subscribe_done, arg);
-        if (rc) {
-            discovery_fail(l, RESP_GATT_ERR, "subscribe start", rc);
-            goto out;
-        }
-        /* Unit 0's module carries notify on FFE2 too — its replies may
-         * surface there. Same val+1 CCCD convention; a module without that
-         * descriptor just returns a harmless ATT error. */
-        if (l->ffe2_handle && (l->ffe2_props & BLE_GATT_CHR_PROP_NOTIFY))
-            ble_gattc_write_flat(ch, l->ffe2_handle + 1, v, sizeof(v), NULL, NULL);
-        /* FFE1 acknowledgement completes CONNECT; the existing transaction
-         * deadline also bounds a missing ack. FFE2 remains optional, with
-         * descriptor discovery intentionally deferred to Stage 5a3. */
+        l->descriptor_phase = DSC_FFE1;
+        int rc = ble_gattc_disc_all_dscs(ch, l->val_handle, l->ffe1_end, on_dsc_disc, arg);
+        if (rc) discovery_fail(l, RESP_GATT_ERR, "FFE1 descriptors start", rc);
     }
 out:
     xSemaphoreGive(s_mtx_link_pool);
@@ -517,7 +596,12 @@ static int on_svc_disc(uint16_t ch, const struct ble_gatt_error *err,
     }
     if (svc && ble_uuid_u16(&svc->uuid.u) == JK_SVC_UUID) {
         if (l->service_seen) goto out; /* one JK service, one procedure */
+        if (!svc->start_handle || svc->end_handle <= svc->start_handle) {
+            discovery_fail(l, RESP_GATT_ERR, "service range", -1);
+            goto out;
+        }
         l->service_seen = true;
+        l->service_end = svc->end_handle;
         int rc = ble_gattc_disc_all_chrs(ch, svc->start_handle, svc->end_handle,
                                         on_chr_disc, arg);
         if (rc) discovery_fail(l, RESP_GATT_ERR, "characteristics start", rc);
@@ -534,6 +618,9 @@ static void discovery_start(link_t *l)
     l->discovery_pending = true;
     l->subscription_pending = false;
     l->discovery_failed = false;
+    l->descriptor_phase = DSC_NONE;
+    l->last_chr_value = 0;
+    l->cccd_handle = l->ffe2_cccd_handle = 0;
     l->service_seen = false;
     l->table_ready = false;
     if (++s_discovery_cookie == 0) ++s_discovery_cookie;
