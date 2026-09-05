@@ -52,7 +52,12 @@ int ble_gap_connect(uint8_t a, const ble_addr_t *b, int32_t t, const struct ble_
 { (void)a; (void)b; (void)t; (void)p; (void)cb; (void)arg; assert(0); return 0; }
 int ble_hs_mbuf_to_flat(const struct os_mbuf *o, void *p, uint16_t n, uint16_t *out)
 { (void)o; (void)p; (void)n; (void)out; assert(0); return 0; }
-void mqtt_publish_llevent(const char *k, uint8_t id, int r) { (void)k; (void)id; (void)r; }
+void mqtt_publish_llevent(const char *k, uint8_t id, int r)
+{
+    (void)k; (void)id; (void)r;
+    assert(pthread_mutex_trylock(s_mtx_link_pool) == 0);
+    assert(pthread_mutex_unlock(s_mtx_link_pool) == 0);
+}
 void mqtt_publish_raw(uint8_t id, const uint8_t *d, uint16_t n) { (void)id; (void)d; (void)n; assert(0); }
 bool net_wifi_up(void) { return true; }
 int64_t net_wifi_down_ms(void) { return 0; }
@@ -98,6 +103,10 @@ static void failed(link_t *l, resp_status_t status)
     assert(responses == 1 && last_response.cmd_id == 42 && last_response.status == status);
     assert(terminate_calls == 1);
 }
+static void *complete_worker(void *arg)
+{ link_t *l = arg; chr_cb(l->conn_handle, &done, NULL, chr_arg); return NULL; }
+static void *timeout_worker(void *arg)
+{ (void)arg; sweep_timeouts(); return NULL; }
 int main(void)
 {
     s_mtx_link_pool = xSemaphoreCreateMutex();
@@ -140,6 +149,10 @@ int main(void)
     assert(terminate_calls == 2 && responses == 1 && l->in_use);
     svc_cb(0, &done, NULL, old_arg); assert(responses == 1);
     test_now += 1000000; terminate_rc = BLE_HS_ENOTCONN; sweep_timeouts();
+    assert(l->in_use && responses == 1); /* ENOTCONN may precede GAP callback */
+    struct ble_gap_event lost = { .type = BLE_GAP_EVENT_DISCONNECT,
+                                  .disconnect.conn.conn_handle = 0 };
+    gap_event(&lost, l);
     assert(!l->in_use && responses == 1);
 
     /* Same handle and same slot reused: old generation cannot fail new work. */
@@ -162,6 +175,42 @@ int main(void)
     assert(last_response.cmd_id == 42 && last_response.status == RESP_OK);
     l->txn_active = true; l->txn.kind = TXN_POLL; test_now = l->txn_deadline_us + 1;
     sweep_timeouts(); assert(terminate_calls == 0 && l->table_ready && l->timeout_strikes == 1);
+
+    /* An allocated scan slot has handle 0 too; do not let it steal a real
+     * handle-0 connection's disconnect/notify callback. */
+    l = setup(0); link_t *scanning = l;
+    scanning->bms_id = 0; scanning->txn_active = false;
+    l = link_alloc(1); assert(l && l != scanning);
+    l->conn_handle = 0; l->txn_active = true;
+    l->txn = (bms_request_t){ .bms_id = 1, .kind = TXN_CONNECT, .cmd_id = 42 };
+    start(l); assert(link_by_conn(0) == l);
+    /* NimBLE fails pending GATT procedures before emitting GAP DISCONNECT. */
+    struct ble_gatt_error disconnected = { .status = BLE_HS_ENOTCONN };
+    svc_cb(0, &disconnected, NULL, svc_arg);
+    assert(l->in_use && l->discovery_failed);
+    gap_event(&lost, l);
+    assert(!l->in_use && scanning->in_use && responses == 1);
+
+    l = setup(0); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+    chr_cb(0, &done, NULL, chr_arg);
+    responses = 0; req.kind = TXN_CONNECT; exec_request(&req);
+    assert(responses == 1 && last_response.status == RESP_OK && svc_calls == 1);
+
+    /* Competing completion/deadline outcomes are serialized by the real
+     * production callback mutex: exactly one result, never UP after failure. */
+    for (unsigned i = 0; i < 1000; i++) {
+        l = setup(7); start(l); service(l); characteristic(l, JK_CHR_UUID, 10);
+        test_now = l->txn_deadline_us + 1;
+        pthread_t a, b;
+        assert(pthread_create(&a, NULL, i & 1 ? complete_worker : timeout_worker, l) == 0);
+        assert(pthread_create(&b, NULL, i & 1 ? timeout_worker : complete_worker, l) == 0);
+        assert(pthread_join(a, NULL) == 0 && pthread_join(b, NULL) == 0);
+        assert(responses == 1 && !l->txn_active && !l->discovery_pending);
+        assert(l->table_ready != l->discovery_failed);
+        assert(last_response.status == (l->table_ready ? RESP_OK : RESP_TIMEOUT));
+        assert(terminate_calls == (l->discovery_failed ? 1u : 0u));
+    }
     puts("PASS: production discovery callbacks, errors/deadlines/retry/stale-generation/request gates");
+    puts("PASS: 1000 concurrent completion/deadline races; disconnect ordering and handle-0 isolation");
     return 0;
 }

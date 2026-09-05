@@ -5,10 +5,10 @@ Baseline: `2f34ad805bc31c81da2bafd045f9da89c8cc4dc3`; working branch
 changes from another stage. Each stage gets a commit, saved binaries, tests,
 and an explicit acceptance decision before the next live deployment.
 
-## Paused for the night — 2026-09-05
+## Current checkpoint — resumed 2026-09-06
 
-Owner requested pause before any further deployment. Do not resume work or OTA
-until asked. Live accepted pair remains **A Stage 4 / B Stage 2**; recovery
+Owner resumed work after the overnight pause. Live accepted pair remains
+**A Stage 4 / B Stage 2**; recovery
 images and exact identities are in
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage4-runtime/MANIFEST.md`.
 No Stage 5 or Stage 6 firmware has been deployed.
@@ -20,12 +20,20 @@ slot until teardown, with rate-limited terminate retries. Successful descriptor
 assumptions/CCCD-ack policy remain unchanged for a separate Stage 5a2.
 Native tests of production callbacks/sweep/request gates pass under ASAN/UBSAN,
 alongside all previously active tests. A firmware build passed with sdkconfig
-byte-identical to baseline. This is a development checkpoint, NOT a
-deployment-ready acceptance. On resume: review callback/mutex/reentrancy and
-disconnect/reuse ordering against pinned NimBLE implementation; extend interleaving
-coverage as needed, confirm firmware build/config, then save/verify candidate
-and perform the owner-approved one-node live check. Bench waiver is recorded
-below; no live battery fault injection or settings changes are authorized.
+byte-identical to baseline. Review against pinned ESP-IDF 5.2.3 NimBLE confirmed
+callbacks run without its host lock, GATT caching is disabled, procedure-start
+failures return without synchronous callbacks, and GATT failure callbacks precede
+connection deletion/GAP DISCONNECT. Fixed an ENOTCONN reuse window: keep the
+failed slot until GAP DISCONNECT, not merely until the controller reports absent.
+Handle-0 lookup excludes unconnected scan slots; CONNECT requires readiness.
+Moved existing GAP telemetry publication outside the new link-pool lock (not
+off the host task; publication isolation remains Stage 8a). Expanded tests cover
+1,000 simultaneous completion/deadline races under ASAN/UBSAN and TSan, and
+GATT-error-before-disconnect ordering. All active tests and final A build pass
+(1,210,608 bytes, unchanged sdkconfig). Live acceptance pending; preflight
+verified A Stage 4/VALID but B
+did not answer at .234. No deployment until both nodes are available.
+Bench waiver remains valid; no live fault injection or battery-setting changes.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert

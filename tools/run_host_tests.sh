@@ -34,5 +34,11 @@ cc "${flags[@]}" -Wno-unused-parameter -ffunction-sections -Wl,-dead_strip \
    -I tools/host_stubs -I node_a/main -I components/net_util/include \
    tools/host_test_discovery.c components/jk_proto/jk_proto.c -o "$test_dir/discovery"
 "$test_dir/discovery"
+cc -DJK_ENABLE_WRITES=1 -fsanitize=thread -g -Wall -Wextra -Wno-unused-parameter -pthread \
+   -ffunction-sections -Wl,-dead_strip -I tools/host_stubs -I node_a/main \
+   -I components/common/include -I components/jk_proto/include \
+   -I components/net_util/include tools/host_test_discovery.c \
+   components/jk_proto/jk_proto.c -o "$test_dir/discovery_tsan"
+"$test_dir/discovery_tsan"
 python3 -B -m unittest discover -s tools
 echo "Test executables preserved at $test_dir"

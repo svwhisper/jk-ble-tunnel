@@ -262,7 +262,9 @@ static const uint8_t *addr_for(uint8_t bms_id)
 static link_t *link_by_conn(uint16_t ch)
 {
     for (int i = 0; i < CFG_LINK_POOL_SIZE; i++)
-        if (s_links[i].in_use && s_links[i].conn_handle == ch) return &s_links[i];
+        if (s_links[i].in_use && s_links[i].conn_handle == ch &&
+            (s_links[i].discovery_pending || s_links[i].discovery_failed ||
+             s_links[i].table_ready)) return &s_links[i];
     return NULL;
 }
 static link_t *link_by_bms(uint8_t id)
@@ -398,8 +400,10 @@ static void discovery_terminate(link_t *l)
     /* Do not recycle a slot while its live connection still owns callbacks.
      * Normal success/EALREADY waits for GAP DISCONNECT; transient failures
      * retry at most once per second, never in a tight callback loop. */
-    if (rc == BLE_HS_ENOTCONN) l->in_use = false;
-    else if (rc && rc != BLE_HS_EALREADY)
+    /* ENOTCONN does not prove the application's DISCONNECT has been delivered:
+     * NimBLE removes the connection before calling it. Keep ownership until
+     * that callback, including when this sweep races the host's teardown. */
+    if (rc && rc != BLE_HS_EALREADY && rc != BLE_HS_ENOTCONN)
         ESP_LOGW(TAG, "bms %u discovery terminate rc=%d; retry pending", l->bms_id, rc);
 }
 
@@ -529,6 +533,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONNECT: {
         xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
         link_t *l = arg;   /* link chosen in the connect call */
+        uint8_t connected_id = 0xFF;
         /* Only the connect we believe is in flight may be adopted; anything
          * else is a stale completion whose slot was freed (and possibly
          * reused) — adopting those is how phantom connections piled onto
@@ -547,7 +552,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 return 0;
             }
             s_conn_events++;   /* the number that can't lie (each = one chirp) */
-            mqtt_publish_llevent("connect", l->bms_id, 0);
+            connected_id = l->bms_id;
             l->conn_handle = event->connect.conn_handle;
             discovery_start(l);
         } else if (expected) {
@@ -558,6 +563,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             l->in_use = false;
         }   /* failed AND unexpected: nothing of ours to clean up */
         xSemaphoreGive(s_mtx_link_pool);
+        /* Network publication must not extend the link-pool critical section.
+         * Moving publication off the host task altogether remains Stage 8a. */
+        if (connected_id != 0xFF) mqtt_publish_llevent("connect", connected_id, 0);
         return 0;
     }
     case BLE_GAP_EVENT_DISCONNECT: {
@@ -568,8 +576,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                  event->disconnect.conn.conn_handle,
                  event->disconnect.reason);
         link_t *l = link_by_conn(event->disconnect.conn.conn_handle);
-        mqtt_publish_llevent("disconnect", l ? l->bms_id : 0xFF,
-                             event->disconnect.reason);
+        uint8_t disconnected_id = l ? l->bms_id : 0xFF;
         if (l) {
             set_link_state(l->bms_id, LINK_REACHABLE_IDLE, false);
             if (l->txn_active) { l->txn_active = false;
@@ -578,6 +585,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             l->discovery_pending = false;
         }
         xSemaphoreGive(s_mtx_link_pool);
+        mqtt_publish_llevent("disconnect", disconnected_id, event->disconnect.reason);
         return 0;
     }
     case BLE_GAP_EVENT_CONN_UPDATE_REQ: {
@@ -755,7 +763,7 @@ static void exec_request(const bms_request_t *req)
             /* A physical connection is not a ready JK link. Keep the original
              * connect txn intact while discovery/teardown resolves. */
             respond(req->bms_id, req->cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
-        } else if (l && l->conn_handle) {   /* already up */
+        } else if (l && l->table_ready) {   /* ready, including valid handle 0 */
             respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
         } else if (l && (l == s_connecting || l == s_conn_inflight)) {
             /* This bank is already mid scan/connect: don't stomp its txn or
