@@ -8,13 +8,16 @@ and an explicit acceptance decision before the next live deployment.
 ## Current checkpoint — resumed 2026-09-06
 
 Owner resumed work after the overnight pause. Last accepted pair remains
-**A Stage 4 / B Stage 2**; recovery
+**A Stage 5a1 / B Stage 2**; recovery
 images and exact identities are in
-`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260905-stage4-runtime/MANIFEST.md`.
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a1-reviewed/MANIFEST.md`.
 Stage 5a1 deployed to A on 2026-09-06 07:28; exact ELF
 `9b68ac3f631792d56d658cd4ae62e073277fc77446198737799a95f3765a5aca`
 and OTA VALID verified at uptime 7396 ms. HTTP 200, ota_0, 1,210,608 bytes in
-21.05 s. Post-deployment phone acceptance pending. B unchanged; no Stage 6
+21.05 s. Owner phone test passed; subsequent fresh telemetry showed all links
+idle/app=false and conn/disc balanced at 8/8 (uptime 185 s), OTA/BLE up,
+internal free heap 99,443 bytes (minimum 95,055). **Stage 5a1 accepted.**
+B unchanged; no Stage 6
 firmware deployed. Reviewed image/backout manifest:
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a1-reviewed/MANIFEST.md`.
 
@@ -224,7 +227,7 @@ phone acceptance. This replaces the bench-required deployment gate, not the
 no-live-fault-injection or battery-setting restrictions. No USB probe changes
 are required. Hardware failure-path coverage remains explicitly unproven.
 Split discovery further: 5a1 failed/timed-out discovery cleanup first; 5a2
-descriptor lookup and subscription acknowledgement separately; 5b boot
+subscription acknowledgement only; 5a3 descriptor lookup separately; 5b boot
 verification evidence/app-safe release still separate.
 
 ## Stage 2 input contract
