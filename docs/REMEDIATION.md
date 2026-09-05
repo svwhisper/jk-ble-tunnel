@@ -81,6 +81,25 @@ and OTA VALID verified at uptime 6256 ms. B unchanged; phone and post-session
 idle acceptance pending. Saved candidate/backout manifest:
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a3-descriptors/MANIFEST.md`.
 
+Acceptance exception: owner reported TUN1/3 working but TUN2 connected without
+a data page (one brief page flash). Retry subsequently updated normally,
+before any reset or firmware change. Fresh bank-2 summary telemetry contained
+continuous changing voltages; the primary discovery/subscription path therefore
+completed and delivered decoded frames on the retry. This does not identify
+the cause of the earlier phone failure or establish reliable cold-session
+behaviour. Keep Stage 5a3 provisional; no next-stage deployment yet.
+
+USB inspection on 2026-09-06 08:00 identified actual Node B at
+`/dev/cu.usbmodem1101`, USB serial `70:AF:09:0D:47:50`, not yesterday's probe.
+Opening the console with pyserial DTR/RTS false nevertheless triggered
+USB_UART_CHIP_RESET (confirmed fresh OTA uptime 17,488 ms). No commands or
+flash were sent; boot also reported PHY calibration saved after checksum
+failure. B recovered on unchanged Stage 2 exact ELF/VALID, tunnel up and
+advertising; heap 69,288, zero phone connections at uptime 34 s. Owner's
+successful TUN2 retry preceded this diagnostic-induced reset. Do not reopen
+this port assuming read-only means reset-free. Original transient remains
+unexplained; acceptance requires another cold TUN2 session after idle.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;
