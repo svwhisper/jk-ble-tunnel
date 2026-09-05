@@ -21,9 +21,7 @@ void arbiter_app_write(uint8_t bms_id, uint8_t idx, bool with_resp,
 void arbiter_poll(uint8_t bms_id, uint8_t opcode);          /* internal poll */
 void arbiter_set_app_connected(uint8_t bms_id, bool connected); /* from tunnel */
 void arbiter_notify_settings(uint8_t bms_id);  /* decoder: a settings frame decoded */
-/* Link-up cleanup: discard pending internal polls only; retain other requests
- * in order, without modifying the active transaction. Not session fencing. */
-void arbiter_clear_pending(uint8_t bms_id);
+void arbiter_clear_pending(uint8_t bms_id);  /* flush stale poll ring (link-up) */
 
 /* MQTT command entry points (validated inside the arbiter, §10). */
 void arbiter_balance_set(uint8_t bms_id, const char *json, const char *id);

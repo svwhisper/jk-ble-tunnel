@@ -96,19 +96,6 @@ static bool ring_pop(pend_t *p, bms_request_t *out)
     return true;
 }
 
-/* Link-up cleanup is not a cancellation of user work. Walk only the original
- * occupancy; pop before requeue means a retained entry always has room, even
- * for a full/wrapped ring. Surviving requests keep their relative order. */
-static void ring_drop_internal_polls(pend_t *p)
-{
-    uint8_t remaining = p->count;
-    bms_request_t req;
-    while (remaining-- && ring_pop(p, &req)) {
-        if (req.kind != TXN_POLL || req.source != SRC_INTERNAL)
-            ring_push(p, &req);
-    }
-}
-
 /* ---- runtime helpers ---------------------------------------------------- */
 static void rt_set_app(uint8_t id, bool app)
 {
@@ -515,9 +502,8 @@ static void arbiter_task(void *arg)
                      * unit was down are stale, and dispatching an old 0x96
                      * before the bootstrap 0x97 breaks fw 19.31's strict
                      * 97-then-96 stream-arming order. */
-                    /* Keep app/MQTT writes and connection controls intact.
-                     * Busy/correlation/backoff belong to the active txn. */
-                    ring_drop_internal_polls(&s_pend[msg.bms_id]);
+                    pend_t *pc = &s_pend[msg.bms_id];
+                    pc->head = pc->tail = pc->count = 0;
                     break;
                 }
                 case ARB_SETTINGS:

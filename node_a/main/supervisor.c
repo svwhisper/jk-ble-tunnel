@@ -201,8 +201,8 @@ static void maintenance_tick(void)
             if (rt.link == LINK_UP) {
                 s_linkup_us[id] = now;       /* session clock for the gentle
                                               * reconnect ladder below */
-                arbiter_clear_pending(id);   /* discard stale internal polls;
-                                              * retain queued user/control work */
+                arbiter_clear_pending(id);   /* flush stale polls first, so the
+                                              * bootstrap dispatches adjacent */
                 arbiter_poll(id, JK_CMD_DEVICE_INFO);
                 arbiter_poll(id, JK_CMD_CELL_INFO);
                 /* 0x6C stream-enable (the app's third bootstrap command,

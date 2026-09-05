@@ -135,7 +135,7 @@ Do not combine these sub-stages in one live test merely because they share a row
   This does NOT change the link-up-as-frame-evidence policy (5b) or fence an
   already-queued idle disconnect against a new app session (6b). Those require
   their own stages; a state-cache lock cannot make queue actions atomic.
-- Stage 5: deferred at owner's request (bench unavailable); no deployment.
+- Stages 5–12: pending; acceptance gates deliberately prevent batch deployment.
   Stage 5a review confirms ignored discovery errors, unchecked procedure starts,
   assumed CCCD handles and premature LINK_UP before subscription success. Its
   isolated acceptance requires bench tests for missing service/characteristic,
@@ -170,6 +170,21 @@ Do not combine these sub-stages in one live test merely because they share a row
   Bootstrap posting is still separate from response dispatch and is not made
   atomic here. Readback/WRITE_RESULT behaviour remains Stage 11. Stages 6b–12
   remain pending. Live nodes stay on the accepted A Stage 4/B Stage 2 pair.
+  Stage 6a candidate is preserved on branch `resilience-stage6a-local-20260905`
+  and in its local-only artifact directory; it has been reverted from the
+  active deployment branch so Stage 5 can ship independently.
+
+## Owner-approved live testing without bench (2026-09-05)
+
+The owner waived bench testing and confirmed physical access for reset/USB
+recovery if OTA becomes unreachable. Continue local failure tests and one
+isolated live change at a time, exact ELF/VALID verification and read-only
+phone acceptance. This replaces the bench-required deployment gate, not the
+no-live-fault-injection or battery-setting restrictions. No USB probe changes
+are required. Hardware failure-path coverage remains explicitly unproven.
+Split discovery further: 5a1 failed/timed-out discovery cleanup first; 5a2
+descriptor lookup and subscription acknowledgement separately; 5b boot
+verification evidence/app-safe release still separate.
 
 ## Stage 2 input contract
 
