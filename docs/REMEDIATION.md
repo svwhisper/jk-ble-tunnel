@@ -114,6 +114,22 @@ Do not conflate this hypothesis with a demonstrated descriptor regression or
 silently bundle the candidate fixes into Stage 5a3. B stayed exact Stage 2/VALID
 at uptime 103,908 ms after console close; no repeat USB reset observed.
 
+2026-09-06 08:04: owner additionally reported slow acknowledgement when
+turning balancing off and an error (suspected timeout) when turning it on
+from the phone Control page. Bank identity and exact error remain unconfirmed;
+asked owner to pause toggles. Do not infer rejection from timeout or retry the
+write automatically. Passive 20 s observation yielded only retained settings,
+not a fresh settings frame, so current enabled state is not verified. B
+acknowledges receipt/enqueue before A/BMS completion; normal app-write outcomes
+are not routed as correlated TUN_WRITE_RESULT replies, and B only acts on
+LINK_DOWN. FFE2 raw-write submission also reports RESP_OK even on immediate
+submission error. These are existing command/result-path flaws, not proof of
+the observed timeout's exact cause; phone protocol reply delivery and queue
+timing remain candidates. MQTT's separate 15 s write/readback workflow does
+not handle these phone writes. No assistant-issued settings commands, USB
+reopen, reboot or deployment during this investigation. Stage 5a3 remains
+unaccepted; stage progression held and Stage 5a2 recovery image retained.
+
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
 `43af289` removed it from the active branch while preserving its documentation;
