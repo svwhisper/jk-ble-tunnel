@@ -15,7 +15,8 @@ Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false
 conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
 Live exception: **A Stage 5b2 is deployed but unaccepted** following delayed
 phone-display failures described below. B remains Stage 2. Stage 5b2 is not
-included in the accepted recovery pair; no subsequent stage may deploy yet.
+included in the accepted recovery pair. The 09:21 checkpoint decision below
+explicitly permits isolated 6c rollout on this provisional baseline.
 Stage 5a3 accepted at 08:14 after owner cold-session phone pass and fresh idle
 telemetry: all four links reachable-idle/app=false, conn/disc 19/19, OTA/BLE up
 at A uptime 1148–1163 s. Earlier intermittent TUN2 symptoms remain unresolved
@@ -328,6 +329,23 @@ Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 do not accidentally restore/bundle it into a Stage 5 deployment.
 
 ## Categories and order
+
+### Checkpoint decision — 2026-09-06 09:21
+
+Owner delegated the baseline decision after requesting continued remediation.
+Proceed with **5b2 as an explicitly provisional baseline**, keeping the
+intermittent display issue open. Similar symptoms predated 5b2; successful warm
+and idle-to-connected TUN1 tests plus balanced final idle counters do not prove
+the problem fixed, but there is no established causal link to 5b2's release
+change. This is a documented exception to the earlier progression hold, not
+retroactive full acceptance. Stage 5b1/B2 remains the accepted fallback.
+
+Authorize only isolated Stage 6c A rollout next; no 6a/6b or B change. Preflight
+confirmed exact live A5b2/B2 ELF and OTA VALID, all four links reachable-idle/
+app=false, conn/disc11/11 at A uptime2037–2067s, OTA/BLE up, internal free heap
+99,295–99,503/min94,383. Candidate and both fallback hashes rechecked. No
+repeat rollback drill, live fault injection or battery-setting tests. Fresh
+post-OTA phone and idle gates remain required; a new regression stops rollout.
 
 ### Resumed local work: Stage 6c before queue retention (2026-09-06)
 
