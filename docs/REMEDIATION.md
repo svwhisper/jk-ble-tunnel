@@ -63,7 +63,7 @@ fresh telemetry confirmed bank 3 returned idle, all app flags false, conn/disc
 **Stage 5a2 accepted.** Image/backout manifest:
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a2-subscribe/MANIFEST.md`.
 
-Stage 5a3 (local, not yet deployed): discover CCCD UUID 0x2902 within each
+Stage 5a3 (deployed to A, phone acceptance pending): discover CCCD UUID 0x2902 within each
 characteristic's own handle range; no value+1 guess. Ranges stop before the next
 declaration (including unrelated UUIDs) or service end. Primary CCCD is required;
 optional FFE2 is best-effort unless the link is lost or the returned layout is
@@ -74,6 +74,12 @@ primary position in a sample range, unrelated attributes, malformed/overlapping
 ranges, duplicate/missing/error/stale callbacks and optional fallback, alongside
 the existing ACK and concurrent discovery/deadline sanitizer suites. A build
 passed (1,212,016 bytes), unchanged sdkconfig. Stage 5a2 is the backout point.
+Committed `3a6810d`; deployed to A ota_0 on 2026-09-06 07:55, HTTP 200 in
+22.38 s. Exact ELF
+`45eba4a502d4b734f9aad43e46de254552c89e9c00da32ac76fe25d10b582bfd`
+and OTA VALID verified at uptime 6256 ms. B unchanged; phone and post-session
+idle acceptance pending. Saved candidate/backout manifest:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a3-descriptors/MANIFEST.md`.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
