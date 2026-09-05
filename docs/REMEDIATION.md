@@ -8,9 +8,13 @@ and an explicit acceptance decision before the next live deployment.
 ## Current checkpoint — resumed 2026-09-06
 
 Owner resumed work after the overnight pause. Last accepted pair remains
-**A Stage 5a2 / B Stage 2**; recovery
+**A Stage 5a3 / B Stage 2**; recovery
 images and exact identities are in
-`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a2-subscribe/MANIFEST.md`.
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a3-descriptors/MANIFEST.md`.
+Stage 5a3 accepted at 08:14 after owner cold-session phone pass and fresh idle
+telemetry: all four links reachable-idle/app=false, conn/disc 19/19, OTA/BLE up
+at A uptime 1148–1163 s. Earlier intermittent TUN2 symptoms remain unresolved
+observations, not claimed fixed. Stage 5a2 recovery predecessor retained.
 Stage 5a1 deployed to A on 2026-09-06 07:28; exact ELF
 `9b68ac3f631792d56d658cd4ae62e073277fc77446198737799a95f3765a5aca`
 and OTA VALID verified at uptime 7396 ms. HTTP 200, ota_0, 1,210,608 bytes in
@@ -63,7 +67,7 @@ fresh telemetry confirmed bank 3 returned idle, all app flags false, conn/disc
 **Stage 5a2 accepted.** Image/backout manifest:
 `/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-stage5a2-subscribe/MANIFEST.md`.
 
-Stage 5a3 (deployed to A, phone acceptance pending): discover CCCD UUID 0x2902 within each
+Stage 5a3 (accepted; chronological test history below): discover CCCD UUID 0x2902 within each
 characteristic's own handle range; no value+1 guess. Ranges stop before the next
 declaration (including unrelated UUIDs) or service end. Primary CCCD is required;
 optional FFE2 is best-effort unless the link is lost or the returned layout is
@@ -147,6 +151,15 @@ held link is consistent with the still-open phone session, not a demonstrated
 idle leak. Final post-session idle gate remains before the next deployment;
 earlier recovered blank-page/control symptoms remain unresolved observations,
 not claimed fixed by descriptor discovery. No additional device changes.
+
+08:14 final idle gate passed after owner reported two minutes disconnected:
+all four links reachable-idle/app=false, conn/disc balanced 19/19, OTA/BLE up,
+internal free heap 99,127–99,331 (minimum 94,311), uptime 1148–1163 s.
+**Stage 5a3 accepted: A Stage 5a3 / B Stage 2.** Saved unchanged B image beside
+A and verified its hash, establishing the next recovery pair. Retain Stage 5a2
+as predecessor and keep the transient TUN2 startup/control observations open.
+Next isolated stage is 5b boot verification evidence/app-safe release; no 5b
+or Stage 6 firmware is included in this accepted image.
 
 Stage 6a is excluded from this draft: commit `45b918f` remains on branch
 `resilience-stage6a-local-20260905` with its saved local-only candidate. Revert
