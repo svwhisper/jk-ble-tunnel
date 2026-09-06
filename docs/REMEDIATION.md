@@ -58,6 +58,12 @@ Save image/backout manifest at
 Accepted10a backout hash rechecked. Deployment/phone acceptance pending;
 A6b1 remains unchanged/unaccepted, no cache/NVS/BMS-setting changes.
 
+08:13 deployment: B10b source d815252 uploaded to ota_1 (HTTP200,
+1,114,496B,14.609167s). Exact candidate ELF/OTA VALID verified at6666ms.
+Paired capture opened `/private/tmp/jk-stage10b-capture.vpnacL/capture.jsonl`;
+A6b1 still exact/VALID/unchanged. B phone acceptance pending, accepted10a
+backout retained; no next-stage deployment until that result is recorded.
+
 ### Stage 10a — isolated B session-start boundary guard, 2026-09-07
 
 Owner authorized proceeding with remediation; B-only change built on diag3.
