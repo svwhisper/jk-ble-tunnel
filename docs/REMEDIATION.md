@@ -18,6 +18,9 @@ does not claim the inherited intermittent display fault fixed or retroactively
 erase the failed 5b2 test. Stage 5b1/B2 remains the earlier accepted fallback.
 Live update 09:56: **A Stage 6b1 deployed and exact ELF/VALID verified; phone/
 idle acceptance pending**. B remains Stage 2, and 6c/B2 is the backout pair.
+10:04 acceptance hold: TUN2 updated, but switching to TUN3 produced "request
+device information failure". Keep 6b1 unaccepted; no further deployment or
+backout yet while collecting one paired read-only retry.
 Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false,
 conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
 Live baseline: A Stage 6c explicitly inherits provisional Stage 5b2 and its
@@ -338,6 +341,23 @@ do not accidentally restore/bundle it into a Stage 5 deployment.
 ## Categories and order
 
 ### Stage 6b split and isolated 6b1 candidate (2026-09-06)
+
+Acceptance exception 10:04: owner reports TUN2 connected/updating, then TUN3
+"request device information failure". The four-minute MQTT capture ended at
+A uptime230s while TUN2 was still active; it does not contain the failed TUN3
+exchange. Later pre-retry health at486s showed all links idle/app=false,
+conn/disc6/6, bank3 last_seen103s: no successful new bank3 radio connection
+since boot, but this does not distinguish a failed scan from absent demand.
+No causal attribution to6b1, its boot retry, or B's known replay defects yet.
+
+Started five-minute paired A UDP/B reset-free USB/MQTT capture at owner-facing
+diagnostic step; timestamped raw chunks saved at
+`/private/tmp/jk-tun3-capture.LpOhPM/capture.jsonl`. A exact6b1/VALID uptime474551ms;
+B exact2/VALID uptime advanced7,416,981 to7,422,106ms across raw USB opening
+(no termios/ioctl/control-line calls, no reset). B initially conns0/tunnel1.
+Requested one direct-Status TUN3 retry, no settings changes. Updated the local
+temporary capture helper to accept a fresh output directory and suppress
+bytecode files. No firmware, settings, NVS or rollback changes; 6c preserved.
 
 Deployment 09:56: source `3020e22`, A ota_0, HTTP 200 in 22.860347 s,
 1,212,192 bytes. Exact ELF
