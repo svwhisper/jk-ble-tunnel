@@ -70,6 +70,12 @@ Saved candidate/backout manifest:
 Bdiag3 and accepted B2 hashes rechecked before deployment. OTA/phone acceptance
 pending; no A, NVS/cache policy or BMS-setting change.
 
+08:00 deployment: Stage10a source6b0c555 uploaded to B ota_0, HTTP200 in
+14.591796s; exact candidate ELF/OTA VALID2 verified at uptime6623ms. Saved
+manifest updated; post-boot paired capture opened at
+`/private/tmp/jk-stage10a-capture.RTB0jM/capture.jsonl`. Phone acceptance pending;
+A remains6b1, unchanged/unaccepted. Backout artifacts remain intact.
+
 Owner approved targeted diagnostics after the captured TUN1 initialization
 failure. This is a separate temporary B-only observability build on accepted
 B Stage 2, not acceptance of A6b1 or progression to 6b2/6a. A stays unchanged.
