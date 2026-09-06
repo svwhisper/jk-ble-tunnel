@@ -139,6 +139,11 @@ Candidate1,113,280B, SHA256ac6415e08b7daf1b8d839596257769776b9f86e26b5b437357b90
 ELF783512e2347699935c60e1c1cbd930b107415cd8d5a0df5b814dd819216fb02a.
 Preflight/deployment pending. A6b1 unchanged; retain Bdiag2 and acceptedB2.
 Diagnostic2 capture completed A11257B/B46798B/MQTT42976B, final B conns0/tunnel1.
+12:40 update: diagnostic3 sourceb36b64b deployed B ota_1, HTTP200 in14.800600s;
+exact expected ELF/OTA VALID verified6413ms. Image/backout manifest:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-b-notify-diag3/MANIFEST.md`.
+New paired capture `/private/tmp/jk-b-notify-diag3-capture.Kuspws/capture.jsonl`.
+A6b1 unchanged/unaccepted; phone/cache-selection comparison pending.
 
 ## Current checkpoint — resumed 2026-09-06
 
