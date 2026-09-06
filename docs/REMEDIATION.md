@@ -5,6 +5,37 @@ Baseline: `2f34ad805bc31c81da2bafd045f9da89c8cc4dc3`; working branch
 changes from another stage. Each stage gets a commit, saved binaries, tests,
 and an explicit acceptance decision before the next live deployment.
 
+## B notification diagnostics — owner authorized 2026-09-06 10:12
+
+Owner approved targeted diagnostics after the captured TUN1 initialization
+failure. This is a separate temporary B-only observability build on accepted
+B Stage 2, not acceptance of A6b1 or progression to 6b2/6a. A stays unchanged.
+Red-team scope: preserve notification bytes/chunks, replay debt/order/counter
+stamping, failure continuation, early dev_seen marking, all timers and NVS.
+Pinned NimBLE ble_gatts_notify_custom returns host-submission status and owns
+the mbuf even on failure; its synchronous notify_tx event adds no independent
+over-air/phone acknowledgement. Log return codes once per replay call or live
+device-info header, allocation offset, accepted byte count, first error/offset,
+MTU/connection, cache length/header/checksum/counter (before stamping), replay
+cancellation, and GAP MTU/disconnect context. No payload/passcode logging.
+Routine successful cell notifications stay quiet; non-device-info live errors
+are rate limited to one log per second. Logs can perturb timing: a successful
+retry on this build is not proof the intermittent fault was repaired.
+
+Local validation: 34,996 production notify/replay invariant cases under
+ASAN/UBSAN (all lengths0..320, six MTUs, allocation failures at every chunk,
+submission failure with unchanged continuation, byte order, CCCD filtering,
+early dev_seen, malformed/empty caches, restamping and diagnostic rate limit).
+Full existing host/TSan suites and16 updater tests passed; output
+`/private/tmp/jk-b-diag-host-tests-final.log`, executables
+`/private/tmp/jk-host-tests.hPDcue`. Initial test-only recording-buffer and
+retained clock assumptions were corrected before the passing run. Firmware
+build passed, B sdkconfig unchanged. New B production delta is ble_periph.c
+only; later shared jk_proto reassembly changes are not linked in B (map checked).
+Preflight: A6b1/B2 exact ELF/VALID, B conns0/tunnel1/heap69324, raw USB uptime
+8276056->8288660ms (no reset). Preserve B2 binary/hash before B-only OTA.
+Deployment and live diagnosis pending. No BMS setting writes or A deployment.
+
 ## Current checkpoint — resumed 2026-09-06
 
 Latest checkpoint: **A Stage 6c / B Stage 2 accepted with the documented

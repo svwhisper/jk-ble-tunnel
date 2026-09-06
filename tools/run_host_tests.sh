@@ -51,4 +51,7 @@ cc -DJK_ENABLE_WRITES=1 -fsanitize=thread -g -Wall -Wextra -Wno-unused-parameter
    components/jk_proto/jk_proto.c test_board/main/synth_frames.c -o "$test_dir/discovery_tsan"
 "$test_dir/discovery_tsan"
 python3 -B -m unittest discover -s tools
+cc "${flags[@]}" -Wno-unused-parameter -ffunction-sections -Wl,-dead_strip \
+   -I tools/host_stubs -I node_b/main tools/host_test_b_notify.c -o "$test_dir/b_notify"
+"$test_dir/b_notify"
 echo "Test executables preserved at $test_dir"

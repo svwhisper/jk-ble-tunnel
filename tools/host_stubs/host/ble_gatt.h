@@ -22,4 +22,31 @@ int ble_gattc_disc_all_dscs(uint16_t, uint16_t, uint16_t, ble_gatt_dsc_fn *, voi
 int ble_gattc_write_flat(uint16_t, uint16_t, const void *, uint16_t, ble_gatt_attr_fn *, void *);
 int ble_gattc_write_no_rsp_flat(uint16_t, uint16_t, const void *, uint16_t);
 int ble_gattc_read(uint16_t, uint16_t, ble_gatt_attr_fn *, void *);
+#define BLE_GATT_SVC_TYPE_PRIMARY 1
+#define BLE_GATT_ACCESS_OP_READ_CHR 0
+#define BLE_GATT_ACCESS_OP_WRITE_CHR 1
+#define BLE_GATT_CHR_F_READ 1
+#define BLE_GATT_CHR_F_WRITE 2
+#define BLE_GATT_CHR_F_WRITE_NO_RSP 4
+#define BLE_GATT_CHR_F_NOTIFY 8
+struct ble_gatt_access_ctxt;
+struct ble_gatt_chr_def {
+    const ble_uuid_t *uuid;
+    int (*access_cb)(uint16_t, uint16_t, struct ble_gatt_access_ctxt *, void *);
+    uint16_t flags;
+    uint16_t *val_handle;
+};
+struct ble_gatt_svc_def {
+    uint8_t type;
+    const ble_uuid_t *uuid;
+    struct ble_gatt_chr_def *characteristics;
+};
+struct ble_gatt_access_ctxt {
+    uint8_t op;
+    struct os_mbuf *om;
+    const struct ble_gatt_chr_def *chr;
+};
+int ble_gatts_notify_custom(uint16_t, uint16_t, struct os_mbuf *);
+int ble_gatts_count_cfg(const struct ble_gatt_svc_def *);
+int ble_gatts_add_svcs(const struct ble_gatt_svc_def *);
 #endif

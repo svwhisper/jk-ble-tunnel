@@ -17,6 +17,7 @@
 #include "adv_mgr.h"
 #include "tunnel_cli.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
@@ -25,6 +26,8 @@
 
 static const char *TAG = "ble_periph";
 static uint16_t s_val_handle;     /* 0xFFE1 value handle (idx 0) */
+static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
+                           uint16_t len, bool replay);
 
 /* ---- identity resolution ------------------------------------------------ */
 static int identity_for_conn(uint16_t handle)
@@ -250,14 +253,29 @@ void ble_periph_replay_tick(void)
          * dead — 14:09 proof). Delivery is tick-serialized with the live
          * relay; worst case one live frame resyncs at its next header. */
         int act = nb_replay_action(id);
-        if (act != 1) continue;
+        if (act != 1) {
+            if (act == 2) ESP_LOGI(TAG, "diag id=%u replay cancelled: dev_seen advanced", id);
+            continue;
+        }
         uint8_t bits = nb_take_replay(id);
         ESP_LOGI(TAG, "id %u replay deliver bits=0x%02X", id, bits);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
             if (seq[r].rec == 0x03) nb_get_warm_dev(id, 0, &w);
             else                     nb_get_warm(id, seq[r].rec, &w);
-            if (!w.len) continue;
+            if (!w.len) {
+                ESP_LOGI(TAG, "diag id=%u replay rec=%u cache empty", id, seq[r].rec);
+                continue;
+            }
+            /* Metadata only: never log payloads (devinfo can hold a passcode).
+             * Observe before stamping; do not add a new validation gate. */
+            uint8_t old_ctr = w.len >= 6 ? w.data[5] : 0;
+            uint8_t old_sum = 0;
+            for (uint16_t k = 0; k + 1 < w.len; k++) old_sum += w.data[k];
+            bool header_ok = w.len >= 5 && w.data[0] == 0x55 &&
+                w.data[1] == 0xAA && w.data[2] == 0xEB && w.data[3] == 0x90 &&
+                w.data[4] == seq[r].rec;
+            bool checksum_ok = old_sum == w.data[w.len - 1];
             /* Stamp a FRESH frame counter and re-checksum: the app dedupes
              * on byte 5 — a cached frame replayed twice is silently
              * discarded the second time (proved 14:28: identical replay
@@ -269,7 +287,10 @@ void ble_periph_replay_tick(void)
                 for (uint16_t k = 0; k < w.len - 1; k++) sum += w.data[k];
                 w.data[w.len - 1] = sum;
             }
-            ble_periph_forward_notify(id, 0, w.data, w.len);
+            forward_notify(id, 0, w.data, w.len, true);
+            ESP_LOGI(TAG, "diag id=%u cache rec=%u len=%u hdr=%d sum=%d ctr=%u->%u",
+                     id, seq[r].rec, w.len, header_ok, checksum_ok, old_ctr,
+                     w.len >= 6 ? w.data[5] : 0);
         }
     }
 }
@@ -335,15 +356,31 @@ static const struct ble_gatt_svc_def s_svcs[] = {
 /* ---- notify fan-in (from tunnel) --------------------------------------- */
 void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uint16_t len)
 {
+    forward_notify(id, idx, data, len, false);
+}
+
+/* Diagnostics only. Same snapshot, chunking, bytes, mbuf ownership and failure
+ * continuation as the accepted implementation. Single tunnel-task caller;
+ * live error logs capped at one per second, routine cell traffic not logged.
+ * rc=0 is host submission, NOT over-air delivery or phone acceptance. */
+static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
+                           uint16_t len, bool replay)
+{
     (void)idx;
     nb_identity_t it; nb_get_identity(id, &it);
-    if (!it.connected || !it.notify_enabled) return;   /* CCCD filter (spec §6) */
+    bool devinfo = len >= 5 && data[0]==0x55 && data[1]==0xAA &&
+        data[2]==0xEB && data[3]==0x90 && data[4]==0x03;
+    if (!it.connected || !it.notify_enabled) {
+        if (replay || devinfo)
+            ESP_LOGI(TAG, "diag id=%u src=%s filtered connected=%d cccd=%d len=%u",
+                     id, replay ? "replay" : "live", it.connected, it.notify_enabled, len);
+        return;   /* CCCD filter (spec §6) */
+    }
 
     /* Stamp devinfo actually reaching the app: the first chunk of a live
      * 0x03 frame (or a replayed one) starts 55AAEB9003. Used by the replay
      * grace logic to cancel debts the app has genuinely been answered on. */
-    if (len >= 5 && data[0]==0x55 && data[1]==0xAA && data[2]==0xEB &&
-        data[3]==0x90 && data[4]==0x03)
+    if (devinfo)
         nb_note_dev_forwarded(id);
 
     uint16_t mtu = ble_att_mtu(it.conn_handle);        /* NIMBLE-PASS */
@@ -355,12 +392,30 @@ void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uin
      * replay-now fired, phone still hit "Request device information
      * failure"). Only replays exceed 128; TUN_RAW chunks already fit. */
     if (chunk > 128) chunk = 128;
+    unsigned attempts = 0, submitted = 0, errors = 0;
+    int first_rc = 0, first_off = -1, oom_off = -1;
     for (uint16_t off = 0; off < len; off += chunk) {
         uint16_t n = (len - off < chunk) ? (len - off) : chunk;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(data + off, n); /* NIMBLE-PASS */
-        if (!om) break;
-        ble_gatts_notify_custom(it.conn_handle, s_val_handle, om);  /* NIMBLE-PASS */
+        if (!om) { oom_off = off; break; }
+        int rc = ble_gatts_notify_custom(it.conn_handle, s_val_handle, om);
+        attempts++;
+        if (!rc) submitted += n;
+        else {
+            if (!errors) { first_rc = rc; first_off = off; }
+            errors++;
+        }
     }
+    static int64_t next_error_log_us;
+    bool report = replay || devinfo;
+    if ((errors || oom_off >= 0) && !report) {
+        int64_t now = esp_timer_get_time();
+        if (now >= next_error_log_us) { report = true; next_error_log_us = now + 1000000; }
+    }
+    if (report)
+        ESP_LOGI(TAG, "diag id=%u src=%s h=%u mtu=%u len=%u calls=%u submitted=%u errors=%u rc=%d off=%d oom=%d",
+                 id, replay ? "replay" : "live", it.conn_handle, mtu, len,
+                 attempts, submitted, errors, first_rc, first_off, oom_off);
 }
 
 void ble_periph_on_write_result(uint8_t id, uint8_t idx, uint8_t status)
@@ -454,7 +509,8 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             nb_set_conn(id, false, 0);
             adv_mgr_on_disconnect(id);
             tunnel_cli_send_client(id, false);
-            ESP_LOGI(TAG, "app disconnected from identity %u", id);
+            ESP_LOGI(TAG, "app disconnected from identity %u h=%u reason=0x%X",
+                     id, h, event->disconnect.reason);
         }
         return 0;
     }
@@ -471,6 +527,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return 0;
     }
     case BLE_GAP_EVENT_MTU:
+        ESP_LOGI(TAG, "diag mtu h=%u value=%u", event->mtu.conn_handle, event->mtu.value);
         return 0;
     default:
         return 0;
