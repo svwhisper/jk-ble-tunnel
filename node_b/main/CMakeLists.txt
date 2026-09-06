@@ -5,6 +5,7 @@ idf_component_register(
         "tunnel_cli.c"
         "adv_mgr.c"
         "ble_periph.c"
+        "stream_start.c"
         "supervisor.c"
         "display.c"
     INCLUDE_DIRS "."

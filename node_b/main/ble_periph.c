@@ -14,6 +14,7 @@
 #include "ble_periph.h"
 #include "config.h"
 #include "nb_state.h"
+#include "stream_start.h"
 #include "adv_mgr.h"
 #include "tunnel_cli.h"
 #include "esp_log.h"
@@ -28,6 +29,15 @@ static const char *TAG = "ble_periph";
 static uint16_t s_val_handle;     /* 0xFFE1 value handle (idx 0) */
 static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
                            uint16_t len, bool replay);
+static bool notify_session(uint8_t id, const uint8_t *data, uint16_t len,
+                           bool replay, const nb_notify_session_t *session);
+/* Only the tunnel task owns these buffers. GAP callbacks change the epoch
+ * under nb_state's lock, never this parser or any notification buffers. */
+static struct {
+    uint64_t epoch;
+    bool aligned;
+    stream_start_t start;
+} s_live[CFG_NUM_UNITS];
 
 /* Compare only the documented public model/hardware/software bytes6..37.
  * Never fingerprint the remainder: it can contain passwords and passcodes.
@@ -381,32 +391,63 @@ static const struct ble_gatt_svc_def s_svcs[] = {
 /* ---- notify fan-in (from tunnel) --------------------------------------- */
 void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uint16_t len)
 {
-    forward_notify(id, idx, data, len, false);
+    (void)idx; /* Replica has one notifying characteristic, as before. */
+    if (id >= CFG_NUM_UNITS) return;
+    nb_notify_session_t session;
+    nb_get_notify_session(id, &session);
+    if (s_live[id].epoch != session.epoch) {
+        s_live[id].epoch = session.epoch;
+        s_live[id].aligned = false;
+        s_live[id].start.len = 0;
+    }
+    if (!session.connected || !session.notify_enabled) return;
+    if (!s_live[id].aligned) {
+        uint16_t consumed;
+        if (!stream_start_push(&s_live[id].start, data, len, &consumed)) return;
+        bool sent = notify_session(id, s_live[id].start.data,
+                                   STREAM_START_RECORD_LEN, false, &session);
+        s_live[id].start.len = 0;
+        if (!sent) return; /* Never open the gate on a partial submission. */
+        s_live[id].aligned = true;
+        ESP_LOGI(TAG, "stream start id=%u aligned", id);
+        data += consumed;
+        len -= consumed;
+    }
+    /* Preserve AT/C8/unknown auxiliary bytes after this first boundary.
+     * Cached replay must NOT align the independent incoming live stream. */
+    if (len) notify_session(id, data, len, false, &session);
 }
 
-/* Diagnostics only. Same snapshot, chunking, bytes, mbuf ownership and failure
- * continuation as the accepted implementation. Single tunnel-task caller;
+/* Same chunking, bytes, mbuf ownership and error continuation as before,
+ * but abort remaining chunks when the session changes. Single tunnel-task caller;
  * live error logs capped at one per second, routine cell traffic not logged.
  * rc=0 is host submission, NOT over-air delivery or phone acceptance. */
 static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
                            uint16_t len, bool replay)
 {
     (void)idx;
-    nb_identity_t it; nb_get_identity(id, &it);
+    nb_notify_session_t session;
+    nb_get_notify_session(id, &session);
+    notify_session(id, data, len, replay, &session);
+}
+
+static bool notify_session(uint8_t id, const uint8_t *data, uint16_t len,
+                           bool replay, const nb_notify_session_t *session)
+{
+    nb_notify_session_t it = *session;
     bool devinfo = len >= 5 && data[0]==0x55 && data[1]==0xAA &&
         data[2]==0xEB && data[3]==0x90 && data[4]==0x03;
     if (!it.connected || !it.notify_enabled) {
         if (replay || devinfo)
             ESP_LOGI(TAG, "diag id=%u src=%s filtered connected=%d cccd=%d len=%u",
                      id, replay ? "replay" : "live", it.connected, it.notify_enabled, len);
-        return;   /* CCCD filter (spec §6) */
+        return false;   /* CCCD filter (spec §6) */
     }
 
-    /* Stamp devinfo actually reaching the app: the first chunk of a live
-     * 0x03 frame (or a replayed one) starts 55AAEB9003. Used by the replay
-     * grace logic to cancel debts the app has genuinely been answered on. */
+    /* Existing early-attempt replay cancellation policy is unchanged, apart
+     * from fencing it to this session. This does not establish delivery. */
     if (devinfo)
-        nb_note_dev_forwarded(id);
+        nb_note_dev_forwarded(id, it.epoch);
 
     uint16_t mtu = ble_att_mtu(it.conn_handle);        /* NIMBLE-PASS */
     if (mtu < 23) mtu = 23;
@@ -420,6 +461,13 @@ static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
     unsigned attempts = 0, submitted = 0, errors = 0;
     int first_rc = 0, first_off = -1, oom_off = -1;
     for (uint16_t off = 0; off < len; off += chunk) {
+        nb_notify_session_t current;
+        nb_get_notify_session(id, &current);
+        if (!current.connected || !current.notify_enabled ||
+            current.epoch != it.epoch || current.conn_handle != it.conn_handle)
+            return false;
+        /* No state lock across NimBLE. This check authorizes this submission;
+         * an already-authorized/submitted notification cannot be recalled. */
         uint16_t n = (len - off < chunk) ? (len - off) : chunk;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(data + off, n); /* NIMBLE-PASS */
         if (!om) { oom_off = off; break; }
@@ -442,6 +490,7 @@ static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
         ESP_LOGI(TAG, "diag id=%u src=%s h=%u mtu=%u len=%u calls=%u submitted=%u errors=%u rc=%d off=%d oom=%d",
                  id, replay ? "replay" : "live", it.conn_handle, mtu, len,
                  attempts, submitted, errors, first_rc, first_off, oom_off);
+    return submitted == len && !errors && oom_off < 0;
 }
 
 void ble_periph_on_write_result(uint8_t id, uint8_t idx, uint8_t status)

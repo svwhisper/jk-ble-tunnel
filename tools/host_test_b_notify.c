@@ -1,6 +1,6 @@
 /* Actual B replay/notify production functions. Simulated mbufs/host submission:
- * no radio, network, serial, NVS or battery commands. Diagnostics must not fix
- * or otherwise change the existing loss/continuation/replay behaviour. */
+ * no radio, network, serial, NVS or battery commands. Established-stream
+ * loss/continuation/replay behaviour remains unchanged by the startup guard. */
 #include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -34,11 +34,20 @@ static int replay_action;
 static uint8_t replay_bits;
 static uint8_t replay_order[3];
 static unsigned replay_gets;
+static int change_session_after_call = -1;
 
 int64_t esp_timer_get_time(void) { return now_us; }
 void nb_get_identity(uint8_t id, nb_identity_t *out)
 { assert(id < CFG_NUM_UNITS); *out = identity; }
-void nb_note_dev_forwarded(uint8_t id) { assert(id == 1); notes++; }
+void nb_get_notify_session(uint8_t id, nb_notify_session_t *out)
+{
+    assert(id < CFG_NUM_UNITS);
+    *out = (nb_notify_session_t){.epoch = identity.notify_epoch,
+        .conn_handle = identity.conn_handle, .connected = identity.connected,
+        .notify_enabled = identity.notify_enabled};
+}
+void nb_note_dev_forwarded(uint8_t id, uint64_t epoch)
+{ assert(id == 1); if (epoch == identity.notify_epoch) notes++; }
 uint16_t ble_att_mtu(uint16_t h) { assert(h == 7); return test_mtu; }
 struct os_mbuf *ble_hs_mbuf_from_flat(const void *data, uint16_t len)
 {
@@ -53,6 +62,7 @@ int ble_gatts_notify_custom(uint16_t h, uint16_t attr, struct os_mbuf *om)
     assert(received_len + om->len <= sizeof(received));
     memcpy(received + received_len, pending_data, om->len);
     received_len += om->len;
+    if ((int)calls == change_session_after_call) identity.notify_epoch += 2;
     return (int)calls++ == notify_fail ? 6 : 0;
 }
 int nb_replay_action(uint8_t id) { return id == 1 ? replay_action : 0; }
@@ -71,6 +81,10 @@ static void reset(void)
     memset(&identity, 0, sizeof(identity));
     identity.connected = identity.notify_enabled = true;
     identity.conn_handle = 7; s_val_handle = 10;
+    identity.notify_epoch = 1;
+    memset(s_live, 0, sizeof(s_live));
+    s_live[1].epoch = 1; s_live[1].aligned = true;
+    change_session_after_call = -1;
     test_mtu = 185; alloc_fail = notify_fail = -1;
     allocs = calls = notes = received_len = log_count = replay_gets = 0;
     last_log[0] = 0;
@@ -187,17 +201,125 @@ int main(void)
         reset(); forward_notify(1, 0, data, len, true);
         assert(strstr(last_dev_log, "fields=short")); cases++;
     }
-    /* Independent B-side reproduction: CCCD toggling on mid-frame also
-     * forwards only its tail, even when A supplied every original byte. */
+    /* Both attach (A supplied only the tail) and CCCD enabling mid-frame
+     * must wait for a complete next frame. Every possible split is tested. */
+    memset(data + 5, 0, 295);
+    uint8_t sum = 0;
+    for (unsigned i = 0; i < 299; i++) sum += data[i];
+    data[299] = sum;
     for (unsigned split = 1; split < 300; split++) {
         reset(); identity.notify_enabled = false;
         ble_periph_forward_notify(1, 0, data, split);
         assert(!calls);
-        identity.notify_enabled = true;
+        identity.notify_enabled = true; identity.notify_epoch++;
         ble_periph_forward_notify(1, 0, data + split, 300 - split);
-        assert(received_len == 300 - split);
-        assert(!memcmp(received, data + split, received_len)); cases++;
+        assert(!received_len && !s_live[1].aligned);
+        ble_periph_forward_notify(1, 0, data, split);
+        assert(!received_len);
+        ble_periph_forward_notify(1, 0, data + split, 300 - split);
+        assert(received_len == 300 && s_live[1].aligned);
+        assert(!memcmp(received, data, 300)); cases++;
     }
-    puts("PASS: reproduced headerless live-session suffix at all299 CCCD-enable split points (not fixed)");
+    puts("PASS: all299 CCCD/attach suffixes suppressed; fragmented next record delivered intact");
+
+    /* Concatenated AT / C8 and unrecognized startup bytes cannot unlock the
+     * live gate. After alignment every byte (including such auxiliary data)
+     * passes unmodified, even in the same input as the first frame's end. */
+    uint8_t stream[640];
+    memset(stream, 0x66, sizeof(stream));
+    memcpy(stream, "AT\r\n\xAA\x55\x90\xEB\xC8", 9);
+    memcpy(stream + 20, data, 300);
+    memcpy(stream + 320, "AT\r\n\xAA\x55\x90\xEB\xC8", 9);
+    for (unsigned rec = 1; rec <= 3; rec++) {
+        stream[24] = rec; sum = 0;
+        for (unsigned i = 20; i < 319; i++) sum += stream[i];
+        stream[319] = sum;
+        for (unsigned chunk = 1; chunk <= 320; chunk++) {
+            reset(); s_live[1].aligned = false;
+            for (unsigned off = 0; off < sizeof(stream); off += chunk) {
+                unsigned n = sizeof(stream) - off;
+                if (n > chunk) n = chunk;
+                ble_periph_forward_notify(1, 0, stream + off, n);
+            }
+            assert(received_len == sizeof(stream) - 20);
+            assert(!memcmp(received, stream + 20, received_len)); cases++;
+        }
+    }
+    /* False/invalid candidate may contain the real header. Sliding recovery
+     * must retain it, at every overlap offset and with one-byte inputs. */
+    for (unsigned offset = 5; offset < 300; offset++) {
+        reset(); s_live[1].aligned = false;
+        memset(stream, 0, sizeof(stream)); memcpy(stream, data, 5);
+        memcpy(stream + offset, data, 300);
+        sum = 0; for (unsigned i = 0; i < 299; i++) sum += stream[i];
+        /* Synthetic prefix chosen so the outer candidate is invalid. */
+        if (sum == stream[299]) { stream[5]++; if (offset == 5) continue; }
+        for (unsigned i = 0; i < offset + 300; i++)
+            ble_periph_forward_notify(1, 0, stream + i, 1);
+        assert(received_len == 300 && !memcmp(received, data, 300)); cases++;
+    }
+    /* Same-handle reconnect or off/on ABA between chunks resets pending
+     * bytes. Cached replay during that wait never opens the live gate. */
+    for (unsigned split = 1; split < 300; split++) {
+        reset(); s_live[1].aligned = false;
+        ble_periph_forward_notify(1, 0, data, split);
+        identity.notify_epoch += 2;
+        forward_notify(1, 0, data, 300, true);
+        assert(received_len == 300 && !s_live[1].aligned);
+        received_len = 0;
+        ble_periph_forward_notify(1, 0, data + split, 300 - split);
+        assert(!received_len);
+        ble_periph_forward_notify(1, 0, data, 300);
+        assert(received_len == 300 && !memcmp(received, data, 300)); cases++;
+    }
+    /* Session edge during a multi-chunk send cuts off remaining old chunks,
+     * even when the new connection is ready and reuses the same handle. */
+    for (unsigned fail = 0; fail < 2; fail++) {
+        reset(); s_live[1].aligned = false; change_session_after_call = fail;
+        ble_periph_forward_notify(1, 0, data, 300);
+        assert(calls == fail + 1 && !s_live[1].aligned);
+        assert(s_live[1].start.len == 0);
+        change_session_after_call = -1; received_len = 0;
+        ble_periph_forward_notify(1, 0, data, 300);
+        assert(received_len == 300 && s_live[1].aligned); cases++;
+    }
+    for (unsigned fail = 0; fail < 3; fail++) {
+        for (unsigned oom = 0; oom < 2; oom++) {
+            reset(); s_live[1].aligned = false;
+            if (oom) alloc_fail = fail; else notify_fail = fail;
+            ble_periph_forward_notify(1, 0, data, 300);
+            assert(!s_live[1].aligned && s_live[1].start.len == 0);
+            alloc_fail = notify_fail = -1; received_len = 0;
+            ble_periph_forward_notify(1, 0, data, 300);
+            assert(received_len == 300 && s_live[1].aligned); cases++;
+        }
+    }
+    for (unsigned m = 0; m < sizeof(mtus)/sizeof(mtus[0]); m++) {
+        for (unsigned split = 1; split < 300; split++) {
+            reset(); s_live[1].aligned = false; test_mtu = mtus[m];
+            ble_periph_forward_notify(1, 0, data, split);
+            assert(!received_len);
+            ble_periph_forward_notify(1, 0, data + split, 300 - split);
+            assert(received_len == 300 && !memcmp(received, data, 300)); cases++;
+        }
+    }
+    reset(); s_live[1].aligned = false;
+    memset(stream, 0x55, sizeof(stream));
+    for (unsigned i = 0; i < 1000; i++)
+        ble_periph_forward_notify(1, 0, stream, 320);
+    assert(!received_len && s_live[1].start.len == 1);
+    memcpy(stream, data, 300); stream[299]++;
+    ble_periph_forward_notify(1, 0, stream, 300); assert(!received_len);
+    ble_periph_forward_notify(1, 0, data, 300);
+    assert(received_len == 300 && !memcmp(received, data, 300));
+
+    /* Per-identity buffer isolation (mock connection state is shared, but
+     * actual gate state is not). Incomplete data on bank0 cannot align1. */
+    reset(); s_live[1].aligned = false;
+    ble_periph_forward_notify(0, 0, data, 100);
+    ble_periph_forward_notify(1, 0, data + 100, 200);
+    assert(!received_len);
+    ble_periph_forward_notify(1, 0, data, 300);
+    assert(received_len == 300 && s_live[0].start.len == 100);
     printf("B notification diagnostic invariants: %u cases passed\n", cases);
 }

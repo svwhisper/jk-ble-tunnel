@@ -218,11 +218,16 @@ bool nb_get_name(uint8_t id, char *out, size_t out_len)
     return have;
 }
 
-/* A devinfo chunk was actually FORWARDED to the app (not merely emitted by
- * the unit toward A — that proxy canceled replays while A's raw forwarding
- * was broken and the app had received nothing, 14:14). */
-void nb_note_dev_forwarded(uint8_t id)
-{ if (id < CFG_NUM_UNITS) { lock(); s_id[id].dev_seen_us = esp_timer_get_time(); unlock(); } }
+/* Keep the existing early-attempt replay policy, but never let an old
+ * session cancel the new session's debt. This is NOT a delivery receipt. */
+void nb_note_dev_forwarded(uint8_t id, uint64_t epoch)
+{
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    if (s_id[id].connected && s_id[id].notify_enabled && s_id[id].notify_epoch == epoch)
+        s_id[id].dev_seen_us = esp_timer_get_time();
+    unlock();
+}
 
 int nb_replay_action(uint8_t id)
 {
@@ -256,13 +261,33 @@ void nb_set_conn(uint8_t id, bool c, uint16_t h)
 {
     if (id >= CFG_NUM_UNITS) return;
     lock();
+    if (s_id[id].connected != c || s_id[id].conn_handle != h)
+        s_id[id].notify_epoch++;
     s_id[id].connected = c; s_id[id].conn_handle = h;
     if (!c) { s_id[id].notify_enabled = false; s_id[id].write_fail_count = 0;
               s_id[id].pending_replay = 0; }   /* owed replays die with the conn */
     unlock();
 }
 void nb_set_notify(uint8_t id, bool en)
-{ if (id >= CFG_NUM_UNITS) return; lock(); s_id[id].notify_enabled = en; unlock(); }
+{
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    if (s_id[id].notify_enabled != en) s_id[id].notify_epoch++;
+    s_id[id].notify_enabled = en;
+    unlock();
+}
+
+void nb_get_notify_session(uint8_t id, nb_notify_session_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (id >= CFG_NUM_UNITS) return;
+    lock();
+    out->epoch = s_id[id].notify_epoch;
+    out->conn_handle = s_id[id].conn_handle;
+    out->connected = s_id[id].connected;
+    out->notify_enabled = s_id[id].notify_enabled;
+    unlock();
+}
 
 int nb_identity_for_conn(uint16_t h)
 {

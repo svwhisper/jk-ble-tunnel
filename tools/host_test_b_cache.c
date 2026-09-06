@@ -40,6 +40,35 @@ static void frame(uint8_t *f)
 int main(void)
 {
     uint8_t old[300], next[300]; nb_cache_t result;
+    nb_state_init();
+    for (unsigned id = 0; id < CFG_NUM_UNITS; id++) {
+        nb_notify_session_t session;
+        nb_get_notify_session(id, &session);
+        assert(!session.connected && !session.notify_enabled && !session.epoch);
+        nb_set_conn(id, true, 7); nb_set_notify(id, true);
+        nb_get_notify_session(id, &session);
+        assert(session.connected && session.notify_enabled && session.epoch == 2);
+        nb_set_conn(id, true, 7); nb_set_notify(id, true);
+        nb_get_notify_session(id, &session); assert(session.epoch == 2);
+        nb_set_notify(id, false); nb_set_notify(id, true);
+        nb_get_notify_session(id, &session); assert(session.epoch == 4);
+        test_now = 100;
+        nb_note_dev_forwarded(id, 2); assert(!s_id[id].dev_seen_us);
+        nb_note_dev_forwarded(id, 4); assert(s_id[id].dev_seen_us == 100);
+        nb_set_conn(id, false, 0); nb_set_conn(id, true, 7);
+        nb_get_notify_session(id, &session);
+        assert(session.epoch == 6 && session.connected && !session.notify_enabled);
+        nb_set_notify(id, true); nb_set_conn(id, true, 8);
+        nb_get_notify_session(id, &session);
+        assert(session.epoch == 8 && session.conn_handle == 8);
+        nb_set_conn(id, false, 0); nb_set_conn(id, false, 0);
+        nb_get_notify_session(id, &session);
+        assert(session.epoch == 9 && !session.connected && !session.notify_enabled);
+    }
+    nb_notify_session_t invalid;
+    nb_get_notify_session(CFG_NUM_UNITS, &invalid);
+    assert(!invalid.connected && !invalid.notify_enabled && !invalid.epoch);
+    puts("PASS: B session epoch edges, duplicate callbacks, handle reuse and identity isolation");
     nb_state_init(); frame(old); old[38] = old[39] = 255; old[40] = 1;
     checksum(old); nb_set_warm(1, 3, old, 300);
     memcpy(next, old, 300); memset(next + 38, 0, 4); next[40] = 2;

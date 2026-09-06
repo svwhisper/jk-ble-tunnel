@@ -7,6 +7,69 @@ and an explicit acceptance decision before the next live deployment.
 
 ## B notification diagnostics — owner authorized 2026-09-06 10:12
 
+### Stage 10a — isolated B session-start boundary guard, 2026-09-07
+
+Owner authorized proceeding with remediation; B-only change built on diag3.
+A6b1 stays unchanged and unaccepted; this does not advance 6b2/6a or fix the
+separately reproduced cache selection/persistence defects.
+
+Red-team decision: do NOT permanently replace the raw stream with decoded
+records, and do not infer alignment from a raw chunk's first byte. At each
+connection/CCCD epoch, B discards the uncertain live prefix and buffers until
+one complete checksum-valid 300-byte JK02 record (01/02/03) is available. It
+submits that record using the existing MTU/128-byte cap, then passes every
+subsequent byte verbatim, including AT/C8 and unknown auxiliary traffic.
+The startup prefix deliberately includes any pre-alignment auxiliary bytes:
+their framing is not sufficiently established to distinguish them reliably
+from an old-frame tail. This is a startup-only compatibility tradeoff to test
+on the phone, not a claim of universal auxiliary-frame parsing. No timeouts,
+delays, fresh BMS commands or writes are added. The first live record incurs
+one-record buffering latency. The per-identity buffers occupy 1,248 static
+bytes total; notification state reads now use a small locked snapshot instead
+of copying the multi-kilobyte identity/cache structure.
+
+The scanner preserves fragmented headers and slides across failed candidates
+so an embedded valid start is not thrown away with a corrupt candidate. Cache
+replay remains independent: it cannot unlock the live gate or interrupt the
+first buffered record's submission (same tunnel-task owner). Reconnect and
+off/on subscription edges use a 64-bit epoch, including same-handle reuse.
+Each notification chunk and the early devinfo-attempt stamp are fenced to the
+captured session. GAP callbacks never touch the parser or send notifications.
+No lock spans a NimBLE call; a submission already authorized by the last
+check cannot be recalled. A partially failed first-frame submission does not
+open the gate. Subsequent notification-error continuation and early-attempt
+replay cancellation policy remain unchanged, not delivery acknowledgements.
+
+Limits explicitly deferred: replay can still interrupt later live records;
+old complete data may already be queued by A without a session tag; delivery
+loss after alignment is not resynchronized by this startup-only change;
+and pending replay ownership across separate debt/cache operations is not
+made transactional here. Checksum validity is not authentication or proof
+of the cause of the phone's intermittent error. Keep this change isolated
+and back out B if initialization or auxiliary/control behavior regresses.
+
+Tests: production notification path checks every 299 attach/CCCD split,
+all six MTUs at every first-record split, all record types and input chunk
+sizes 1..320 with concatenated auxiliary prefixes/suffixes, corrupt/overlapping
+headers, repeated false prefixes, replay while live bytes are buffered,
+same-handle epoch changes between/during submissions, allocation/submission
+failures, and per-bank parser isolation. Actual nb_state checks epoch edges,
+duplicate callbacks, handle reuse and stale replay-cancellation stamps.
+Existing established-stream/cache/updater and A sanitizer/TSan tests retained.
+Final full suite passed:38,940 notification cases,12,880 cache equivalence
+cases,16 updater cases and existing A sanitizer/TSan suites. Log
+`/private/tmp/jk-b-start-full-tests-final.log`, executables
+`/private/tmp/jk-host-tests.danCS4`; B build passed with sdkconfig unchanged.
+Preflight07:58: both exact expected images OTA VALID; fresh B USB console
+heap69292/conns0/tunnel1, uptime24724621->24741594ms without reset.
+Candidate1,114,288B, ELF
+`6a70c8bd996c916bdde3243b1af3bfc5cd4975d5c235a082bc60037af587d919`, SHA256
+`2dd3a8820e48417f4a629b23832ab0571d65ac359b992a7af471277fec3a635f`.
+Saved candidate/backout manifest:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260907-stage10a-session-start/MANIFEST.md`.
+Bdiag3 and accepted B2 hashes rechecked before deployment. OTA/phone acceptance
+pending; no A, NVS/cache policy or BMS-setting change.
+
 Owner approved targeted diagnostics after the captured TUN1 initialization
 failure. This is a separate temporary B-only observability build on accepted
 B Stage 2, not acceptance of A6b1 or progression to 6b2/6a. A stays unchanged.

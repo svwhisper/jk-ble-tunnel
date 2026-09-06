@@ -52,7 +52,8 @@ cc -DJK_ENABLE_WRITES=1 -fsanitize=thread -g -Wall -Wextra -Wno-unused-parameter
 "$test_dir/discovery_tsan"
 python3 -B -m unittest discover -s tools
 cc "${flags[@]}" -Wno-unused-parameter -ffunction-sections -Wl,-dead_strip \
-   -I tools/host_stubs -I node_b/main tools/host_test_b_notify.c -o "$test_dir/b_notify"
+   -I tools/host_stubs -I node_b/main tools/host_test_b_notify.c \
+   node_b/main/stream_start.c -o "$test_dir/b_notify"
 "$test_dir/b_notify"
 cc "${flags[@]}" -pthread -I tools/host_stubs -I node_b/main \
    tools/host_test_b_cache.c -o "$test_dir/b_cache"

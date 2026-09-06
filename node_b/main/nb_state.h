@@ -44,6 +44,7 @@ typedef struct {
     bool     connected;
     uint16_t conn_handle;
     bool     notify_enabled;   /* CCCD state for 0xFFE1 (local, spec §6) */
+    uint64_t notify_epoch;     /* connection / CCCD edges, including handle reuse */
     uint8_t  write_fail_count;
 
     /* per-idx read cache */
@@ -76,8 +77,8 @@ typedef struct {
                                   * after the app's opener window — a held
                                   * replay must never inject a stale frame
                                   * into a live session much later. */
-    int64_t    dev_seen_us;      /* last devinfo chunk FORWARDED TO THE APP —
-                                  * proof the app actually heard an answer */
+    int64_t    dev_seen_us;      /* last devinfo submission attempt, not proof
+                                  * of radio delivery or phone acceptance */
 } nb_identity_t;
 
 typedef struct {
@@ -116,6 +117,13 @@ uint8_t nb_take_replay(uint8_t bms_id);   /* returns and clears the bits */
  * whole-struct copy in a NimBLE callback blew the nimble_host stack
  * (2026-08-30 panic). Use these where only the flags are needed. */
 bool nb_notify_ready(uint8_t bms_id);     /* connected && notify_enabled */
+typedef struct {
+    uint64_t epoch;
+    uint16_t conn_handle;
+    bool connected;
+    bool notify_enabled;
+} nb_notify_session_t;
+void nb_get_notify_session(uint8_t bms_id, nb_notify_session_t *out);
 bool nb_replay_ready(uint8_t bms_id);     /* ...&& pending_replay != 0   */
 int  nb_conn_handle(uint8_t bms_id);      /* handle, or -1 if not connected */
 bool nb_get_name(uint8_t bms_id, char *out, size_t out_len); /* false if unset */
@@ -135,7 +143,7 @@ tunnel_link_state_t nb_link_state(uint8_t bms_id);
  * no devinfo seen — a mortal module's inbound side can be deaf while its
  * stream still flows (proved 14:09: 9 s of live cells, 97 unanswered). */
 int nb_replay_action(uint8_t bms_id);
-void nb_note_dev_forwarded(uint8_t bms_id);  /* devinfo chunk reached the app */
+void nb_note_dev_forwarded(uint8_t bms_id, uint64_t epoch);
 
 /* connection bookkeeping */
 void nb_set_conn(uint8_t bms_id, bool connected, uint16_t handle);
