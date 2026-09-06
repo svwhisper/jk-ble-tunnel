@@ -76,6 +76,23 @@ manifest updated; post-boot paired capture opened at
 `/private/tmp/jk-stage10a-capture.RTB0jM/capture.jsonl`. Phone acceptance pending;
 A remains6b1, unchanged/unaccepted. Backout artifacts remain intact.
 
+08:03 owner reports "works perfectly" after the requested switching/Status
+test: **B Stage10a phone acceptance PASS**. Capture shows nine app sessions
+in order3,1,3,2,3,2,1,3,2, with live startup alignment observed on every healthy
+identity (six sessions aligned; three brief sessions ended earlier). Logged
+notification summaries show zero submission errors/no allocation failure.
+B stayed on the exact candidate/VALID, uptime42135->209882ms; no reset after
+the intentional OTA reboot. Final phone disconnect185085ms, conns0/tunnel1
+and heap recovered from60888 to67928 by204352ms. Capture still running at this
+checkpoint. This accepts the isolated read-only phone test, not a long soak
+or control-setting test, and does not prove all intermittent faults cured.
+A remains6b1/unaccepted: the same capture contains bank1 radio0x208 after37s
+streaming, bank3 transaction timeout and discovery-deadline failure. Do not
+label the whole system fault-free or silently accept A based on the B test.
+Next boundary work remains later-live/replay interleaving; cache selection/
+persistence and A queue/command session ownership remain separate stages.
+No further OTA or BMS-setting changes; prior recovery images preserved.
+
 Owner approved targeted diagnostics after the captured TUN1 initialization
 failure. This is a separate temporary B-only observability build on accepted
 B Stage 2, not acceptance of A6b1 or progression to 6b2/6a. A stays unchanged.
