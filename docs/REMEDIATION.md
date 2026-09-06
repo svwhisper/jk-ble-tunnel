@@ -82,6 +82,12 @@ raw USB uptime7441016->7453518ms confirms no reset. Candidate1,112,736B,
 ELF9517f3cfd0bf62bdb606b9bdc96f59a5bb82350348e494a230972e8e47ac2fd2,
 SHA25692ec52e708715c75902f66dd75b5df71737ca66fc7f2c28e2be8934b3dfaec00.
 Preserve revision1 and accepted B2 independently; next update B only.
+12:26 update: revision2 source89695f7 deployed B ota_0, HTTP200 in14.945131s;
+exact candidate ELF/OTA VALID verified at6336ms. A6b1 unchanged. Saved image,
+hashes and B2/diag1 backout paths in
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-b-notify-diag2/MANIFEST.md`.
+Fresh paired capture `/private/tmp/jk-b-notify-diag2-capture.fSXlCA/capture.jsonl`;
+phone comparison pending. No functional fix or stage acceptance inferred.
 
 ## Current checkpoint — resumed 2026-09-06
 
