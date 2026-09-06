@@ -91,6 +91,40 @@ Repository HEAD still contains held10b code: do not blindly rebuild/redeploy
 it. Accepted10a image/manifest remains the running B recovery checkpoint.
 Post-backout phone-speed comparison pending; no NVS/BMS-setting changes.
 
+08:21 restored10a comparison: owner reports TUN2 pass, TUN1 timeout then retry
+pass, TUN3 timeout. **Rollback did not eliminate the intermittent startup
+failure**;10b remains held, but is not its sole cause. Exact A6b1/B10a VALID
+rechecked (A26433232ms/B253744ms). Capture
+`/private/tmp/jk-stage10a-comparison.Mn2bX2/capture.jsonl`.
+
+First TUN1 B session135950..142991ms: cached devinfo submitted136977ms,
+47ms after0x97,300B/3 calls/errors0; no live alignment or app0x96 before exit.
+A bank1 first discovery failed rc7 (pinned NimBLE BLE_HS_ENOTCONN) following
+"Reattempt connection; reason0x3e". The stack then retried automatically,
+and A logged "orphan connect handle=2" and terminated it. A's own later retry
+completed subscription just after the first phone session ended. The owner's
+second TUN1 attempt154440ms then had live alignment155414ms, live devinfo and
+0x96 at155976ms, and worked.
+
+TUN3 B session164401..173052ms: cached devinfo submitted166780ms,30ms after
+0x97,300B/3 calls/errors0; no live alignment or0x96 during session. A scans
+26344036..26349062 and26351456..26356477 failed; the next attempt started
+26360478 and reached opener/stream26367832, about15s after phone departure
+by capture receipt times. Cached-only replies did not bridge these waits;
+host submission success still does not establish over-air/app acceptance.
+
+Pinned source explains the bank1 retry mismatch: sdkconfig enables NimBLE
+connection reattempt (max3); ble_gap_master_connect_reattempt tears down GATT
+and reconnects with the saved callback, while A's GAP CONNECT adoption only
+accepts s_conn_inflight. An internal retry has no matching application-owned
+inflight attempt and is correctly rejected by the stale/orphan safety guard.
+Do not simply weaken that guard: it protects against stale slot reuse.
+Next isolated review target is one owner for A reconnects (evaluate disabling
+the stack's hidden retry versus explicitly tracking it), with production-path
+tests and separate A deployment/backout. B cached-only initialization remains
+a second open issue. No implementation/config/OTA change in this comparison;
+pause phone retries, keep B10a running and10b source/deployment held.
+
 ### Stage 10a — isolated B session-start boundary guard, 2026-09-07
 
 Owner authorized proceeding with remediation; B-only change built on diag3.
