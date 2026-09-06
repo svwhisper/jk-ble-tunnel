@@ -69,6 +69,17 @@ int main(void)
     nb_get_notify_session(CFG_NUM_UNITS, &invalid);
     assert(!invalid.connected && !invalid.notify_enabled && !invalid.epoch);
     puts("PASS: B session epoch edges, duplicate callbacks, handle reuse and identity isolation");
+    nb_state_init(); nb_set_conn(1, true, 7); nb_set_notify(1, true);
+    nb_set_link(1, LINK_UP); test_now = 10000000;
+    nb_mark_replay(1, NB_REPLAY_DEVINFO);
+    for (unsigned second = 0; second <= 5; second++) {
+        test_now = 10000000 + second * 1000000;
+        assert(nb_replay_action(1) == (second > 2 ? 1 : 0));
+        assert(s_id[1].pending_since_us == 10000000 && s_id[1].pending_replay == 1);
+    }
+    test_now++;
+    assert(!nb_replay_action(1) && !s_id[1].pending_replay);
+    puts("PASS: deferred replay retains original2s grace/5s expiry without renewing debt");
     nb_state_init(); frame(old); old[38] = old[39] = 255; old[40] = 1;
     checksum(old); nb_set_warm(1, 3, old, 300);
     memcpy(next, old, 300); memset(next + 38, 0, 4); next[40] = 2;

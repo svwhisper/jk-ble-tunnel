@@ -7,6 +7,57 @@ and an explicit acceptance decision before the next live deployment.
 
 ## B notification diagnostics — owner authorized 2026-09-06 10:12
 
+### Stage 10b — isolated B replay boundary gate, 2026-09-07
+
+Owner said proceed after accepting10a. Red-team scope: prevent later replay
+interleaving without permanently buffering/filtering live traffic, relying on
+silence, assuming raw chunks begin at headers, or changing reply content,
+timers, cache/NVS policy, A firmware or BMS commands. A production-function
+test reproduced300 cached bytes inserted100 bytes into a live cell record.
+
+Reuse the existing bounded scanner as an observer after startup. Live bytes
+and notification chunking stay unchanged. Replay is eligible only before any
+live bytes have been submitted in this app/CCCD epoch, or when the last fully
+submitted live input ends exactly at a checksum-valid300-byte JK02 record.
+Any suffix (AT/C8/unknown/partial header), corrupt record or failed submission
+closes replay. Wait for a subsequent valid end; do not take/clear/renew the
+debt while waiting. Existing2s grace,5s expiry and live-devinfo cancellation
+continue to run. The epoch helper also resets an old observer when a new
+session's replay tick runs before its first raw input. No extra allocation
+or buffer beyond10a; established input is observed, not delayed/reassembled
+for delivery. First-frame startup behavior remains10a.
+
+Tradeoff: if every valid record shares its final raw chunk with auxiliary
+suffix bytes, or no valid ending arrives, replay can expire without delivery.
+Do not force it into an uncertain stream or split live chunks to manufacture
+an opportunity. This requires isolated phone testing and10a backout on
+regression. An incomplete/failed previous submission can still leave the phone
+parser needing recovery; this gate is not an acknowledgement or delivery-loss
+fix. Replay debt/session ownership across separate state operations, cached
+content/counters, A queued-session tags and A radio failures remain separate.
+
+Tests preserve10a suites and add all299 live splits at six MTUs for every
+replay debt type, repeated waiting ticks, byte-exact raw/auxiliary forwarding,
+checksum/counter/order checks after deferred replay, corrupt input, same-chunk
+record ends and following partial headers, failed first/established sends,
+replay during buffered startup and epoch resets. Actual nb_state tests check
+that repeated decisions do not extend the original grace/expiry. Production
+reproduction before fix passed; full final tests/build and deployment record
+follow below. Only B10b is in scope; accepted10a immediate backout retained.
+
+08:11 validation: full46,263 notification/12,880 cache/16 updater and prior
+A sanitizer/TSan tests passed; log `/private/tmp/jk-stage10b-host-tests-final.log`,
+executables `/private/tmp/jk-host-tests.VtM6Kk`. B build passed/config unchanged,
+static observer/startup buffers still1,248B total. Preflight exact A6b1/B10a
+VALID, B conns0/tunnel1/heap67916 and raw USB uptime617939->632503ms/no reset.
+Candidate1,114,496B, ELF
+`0d92d0147250f637b0c83595df58e0895f3542c3aa2155e8f2bd65496310033f`, SHA256
+`b5512883765a0432225692c2572ea2fee43d8a5824da1d645c3d2272e83b675c`.
+Save image/backout manifest at
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260907-stage10b-replay-boundary/MANIFEST.md`.
+Accepted10a backout hash rechecked. Deployment/phone acceptance pending;
+A6b1 remains unchanged/unaccepted, no cache/NVS/BMS-setting changes.
+
 ### Stage 10a — isolated B session-start boundary guard, 2026-09-07
 
 Owner authorized proceeding with remediation; B-only change built on diag3.
