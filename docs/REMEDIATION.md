@@ -35,6 +35,15 @@ only; later shared jk_proto reassembly changes are not linked in B (map checked)
 Preflight: A6b1/B2 exact ELF/VALID, B conns0/tunnel1/heap69324, raw USB uptime
 8276056->8288660ms (no reset). Preserve B2 binary/hash before B-only OTA.
 Deployment and live diagnosis pending. No BMS setting writes or A deployment.
+10:20 update: diagnostic source5e7796e deployed to B ota_1, HTTP200 in13.837998s,
+1,112,304 bytes; exact ELF
+`84ee75839e86d1291de54f2d6d82fd317b255f68aa5435d5f95cac8a579ef7dc`
+and OTA VALID verified at uptime6585ms. Manifest/image/backout instructions:
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260906-b-notify-diag/MANIFEST.md`.
+Paired five-minute A UDP/B reset-free USB/MQTT capture started at
+`/private/tmp/jk-b-notify-diag-capture.Z4go1B/capture.jsonl`.
+Phone acceptance and diagnostic outcome pending. A remains unchanged6b1;
+no progression to6b2/6a and no claim of fixing initialization.
 
 ## Current checkpoint — resumed 2026-09-06
 
