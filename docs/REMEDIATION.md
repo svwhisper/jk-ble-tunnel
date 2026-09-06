@@ -114,6 +114,32 @@ allocation, absent public versions or idle teardown. Stop unguided retries;
 no third diagnostic OTA or functional fix applied on this observation.
 A6b1 remains unaccepted; Bdiag2 remains diagnostic-only, backouts unchanged.
 
+12:38 continued local review: production-cache synthetic tests reproduce two
+independent flaws: score38..159 includes uptime (e.g.131071->131072 decreases
+nonzero bytes and rejects otherwise identical newer devinfo); equal-score
+serial changes replace RAM but skip NVS because the persistence comparison
+only covers public model/HW/SW6..37. Neither is established as the phone fault.
+The field boundaries agree with the upstream JK BLE decoder:
+https://github.com/syssi/esphome-jk-bms/blob/main/components/jk_bms_ble/jk_bms_ble.cpp
+(device info: uptime38..41, power-on count42..45, name46..61). Its parser
+is not evidence of the official iOS app's complete acceptance requirements.
+Reject speculative pacing/retry/counter changes for now; cache-selection
+changes also interact with persistent state and require their own backout plan.
+
+Diagnostic3 observes the actual complete-frame selection: old/new scores and
+counters, keep/discard, public-fields equality and stable-body equality excluding
+counter/checksum/uptime/boot count. Equality flags only: no private bytes or
+private-field hashes. Logs run outside the state mutex, buffers/selection/NVS
+policy unchanged. 12,880 byte-for-byte selector equivalence cases cover all
+identities, empty/full old caches, lengths0..321 and record classes0..4;
+assert logging outside the mutex. Full existing suites plus35,285 notify cases
+and16 updater tests passed at `/private/tmp/jk-host-tests.qw8bsg`;
+`/private/tmp/jk-b-diag3-host-tests-final.log`. B build passed/config unchanged.
+Candidate1,113,280B, SHA256ac6415e08b7daf1b8d839596257769776b9f86e26b5b437357b90d65a27b1ca3,
+ELF783512e2347699935c60e1c1cbd930b107415cd8d5a0df5b814dd819216fb02a.
+Preflight/deployment pending. A6b1 unchanged; retain Bdiag2 and acceptedB2.
+Diagnostic2 capture completed A11257B/B46798B/MQTT42976B, final B conns0/tunnel1.
+
 ## Current checkpoint — resumed 2026-09-06
 
 Latest checkpoint: **A Stage 6c / B Stage 2 accepted with the documented

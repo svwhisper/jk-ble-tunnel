@@ -97,19 +97,39 @@ void nb_set_warm(uint8_t id, uint8_t rec, const uint8_t *frame, uint16_t len)
         w = &s_id[id].warm_dev[0];          /* single slot: the richest frame */
         int news = devinfo_score(frame, len);
         int olds = devinfo_score(w->data, w->len);
-        if (w->len && news < olds) { unlock(); return; }  /* never downgrade */
+        /* Diagnostic scalars only; never log/hash the private field bytes.
+         * Exclude counter/checksum and volatile uptime/boot count38..45 from
+         * stable comparison. Selection/persistence policy remains unchanged. */
+        bool keep = w->len && news < olds;
+        bool public_same = w->len == len && len >= 38 &&
+                           memcmp(w->data + 6, frame + 6, 32) == 0;
+        bool stable_same = public_same && len > 46 &&
+                           memcmp(w->data + 46, frame + 46, len - 47) == 0;
+        unsigned old_ctr = w->len >= 6 ? w->data[5] : 0;
+        unsigned new_ctr = len >= 6 ? frame[5] : 0;
+        if (keep) {
+            unlock();
+            ESP_LOGI(TAG, "diag devpick id=%u keep=1 score=%d->%d ctr=%u->%u public_same=%d stable_same=%d",
+                     id, olds, news, old_ctr, new_ctr, public_same, stable_same);
+            return;   /* existing never-downgrade rule */
+        }
         /* Persist on a richness upgrade or identity change (compare skips
          * the counter byte 5 and volatile uptime; NVS wear guard). */
         persist = (news > olds) ||
                   !(w->len == len && len >= 38 &&
                     memcmp(w->data + 6, frame + 6, 32) == 0);
+        /* Copy exactly as before; unlock before console I/O. */
+        w->len = len; memcpy(w->data, frame, len);
+        unlock();
+        ESP_LOGI(TAG, "diag devpick id=%u keep=0 score=%d->%d ctr=%u->%u public_same=%d stable_same=%d persist=%d",
+                 id, olds, news, old_ctr, new_ctr, public_same, stable_same, persist);
     } else {
         w = rec == 0x02 ? &s_id[id].warm_cellinfo
           : rec == 0x01 ? &s_id[id].warm_settings : NULL;
         if (rec == 0x02) s_id[id].warm_cell_us = esp_timer_get_time();
+        if (w) { w->len = len; memcpy(w->data, frame, len); }
+        unlock();
     }
-    if (w) { w->len = len; memcpy(w->data, frame, len); }
-    unlock();
     if (persist && s_nvs) {
         char k[8]; devinfo_key(id, page, k);
         if (nvs_set_blob(s_nvs, k, frame, len) == ESP_OK) nvs_commit(s_nvs);
