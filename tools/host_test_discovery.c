@@ -26,6 +26,9 @@ static void *dsc_arg;
 static uint16_t dsc_start, dsc_end, written_handle, optional_written_handle;
 static unsigned dsc_calls;
 static unsigned frame_notes, frame_copies;
+static bool capture_raw;
+static unsigned raw_len;
+static uint8_t raw_bytes[2 * JK_FRAME_MAX];
 static int64_t frame_time;
 static bms_runtime_t test_runtime[CFG_NUM_UNITS];
 static int dsc_rc, optional_dsc_rc;
@@ -36,7 +39,13 @@ BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t ticks)
 {
     (void)ticks;
     if (q == g_q_notify || q == g_q_decode) {
-        assert(!((const notify_item_t *)item)->raw);
+        const notify_item_t *it = item;
+        if (it->raw) {
+            assert(capture_raw && q == g_q_notify);
+            assert(raw_len + it->len <= sizeof(raw_bytes));
+            memcpy(raw_bytes + raw_len, it->data, it->len); raw_len += it->len;
+            return pdTRUE;
+        }
         frame_copies++;
         return pdTRUE;
     }
@@ -492,6 +501,28 @@ int main(void)
     on_notify(l, frame + 128, frame_len - 128);
     assert(frame_notes == 1 && frame_copies == 2 && frame_time == test_now);
     puts("PASS: frame evidence only after complete checksum-valid production reassembly");
+    /* Diagnostic reproduction, NOT desired behaviour: app attach between raw
+     * chunks starts the new phone stream with a headerless old-frame suffix.
+     * A's decoder still gets complete valid frames, hiding this from MQTT. */
+    frame_len = synth_device_info(frame, sizeof(frame), "TEST BMS");
+    assert(frame_len == 300); capture_raw = true;
+    for (int split = 1; split < frame_len; split++) {
+        l = setup(7); l->txn_active = false;
+        jk_reasm_init(&l->reasm, JK_FRAME_JK02_32S);
+        raw_len = 0; frame_copies = frame_notes = 0;
+        test_runtime[1].app_connected = false;
+        on_notify(l, frame, split);
+        test_runtime[1].app_connected = true;
+        on_notify(l, frame + split, frame_len - split);
+        assert(raw_len == (unsigned)(frame_len - split));
+        assert(!memcmp(raw_bytes, frame + split, raw_len));
+        assert(frame_notes == 1 && frame_copies == 2);
+        on_notify(l, frame, frame_len);
+        assert(!memcmp(raw_bytes + frame_len - split, frame, frame_len));
+        assert(frame_notes == 2 && frame_copies == 4);
+    }
+    capture_raw = false; test_runtime[1].app_connected = false;
+    puts("PASS: reproduced headerless live-session suffix at all299 app-attach split points; MQTT evidence stays valid (not fixed)");
     puts("PASS: production discovery callbacks, errors/deadlines/retry/stale-generation/request gates");
     puts("PASS: 2000 concurrent discovery/ACK/deadline races; disconnect ordering and handle-0 isolation");
     puts("PASS: subscription ACK gating, 260 rejected statuses, malformed/duplicate/stale/missing ACKs");

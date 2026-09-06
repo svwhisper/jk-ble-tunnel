@@ -145,6 +145,36 @@ exact expected ELF/OTA VALID verified6413ms. Image/backout manifest:
 New paired capture `/private/tmp/jk-b-notify-diag3-capture.Kuspws/capture.jsonl`.
 A6b1 unchanged/unaccepted; phone/cache-selection comparison pending.
 
+12:46 result: owner reports "device is not supported" on1 after switching.
+Last recorded TUN1 session94596..97296ms (2.700s) subscribed95435, opener0x97
+95615/linkUP and departed97296, before the2s replay grace. No cached replay
+was sent during that session. Complete devinfo selections for1 all keep=0,
+score61->61/public_same=1/stable_same=1: cache-selection flaws did not discard
+the fresh frames in this trace. Three live notify attempts97243..97248 shortly
+preceded departure; none had a devinfo header at byte0 according to current
+diagnostics. The next byte0 devinfo header97430 was filtered after departure.
+Do NOT equate absent byte0-header logs with proof of missing headers: raw
+chunks can contain concatenated prefixes and headers at other offsets.
+Earlier brief TUN1 session90629..92559 did send a valid cached devinfo; latest
+session is the presumed reported failure based on owner sequence, not an
+independently timestamped phone error. No idle teardown coincided with it.
+
+New local reproduction (no firmware change): A's on_notify app_connected gate
+and B's forward_notify CCCD gate independently admit a headerless old-frame
+suffix when enabled mid-frame. Tests of actual production functions exercise
+all299 split positions for each gate. A continues to decode/cache complete
+valid frames, so healthy MQTT evidence does not establish complete phone input.
+Full suite passed, `/private/tmp/jk-session-boundary-reproduction.log`, artifacts
+`/private/tmp/jk-host-tests.QX6K4z`; A reproduction in ASAN/UBSAN and TSan runs,
+B notify suite now35,584 cases, existing cache12880/updater16 pass.
+These are tests of a known unsafe boundary, not a fix or proof of the exact
+phone error's byte stream. Next isolated Stage10 boundary remedy must handle
+both attach and CCCD transitions, reused connections, fragmented/concatenated
+headers, live/replay ordering and AT/C8 auxiliary bytes; merely changing A's
+idle fence or adding notification delays will not establish these guarantees.
+No additional OTA/backout/cache policy or BMS changes. Keep A6b1 unaccepted;
+Bdiag3 diagnostic-only and prior recovery images preserved. Pause phone retries.
+
 ## Current checkpoint — resumed 2026-09-06
 
 Latest checkpoint: **A Stage 6c / B Stage 2 accepted with the documented

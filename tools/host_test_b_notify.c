@@ -187,5 +187,17 @@ int main(void)
         reset(); forward_notify(1, 0, data, len, true);
         assert(strstr(last_dev_log, "fields=short")); cases++;
     }
+    /* Independent B-side reproduction: CCCD toggling on mid-frame also
+     * forwards only its tail, even when A supplied every original byte. */
+    for (unsigned split = 1; split < 300; split++) {
+        reset(); identity.notify_enabled = false;
+        ble_periph_forward_notify(1, 0, data, split);
+        assert(!calls);
+        identity.notify_enabled = true;
+        ble_periph_forward_notify(1, 0, data + split, 300 - split);
+        assert(received_len == 300 - split);
+        assert(!memcmp(received, data + split, received_len)); cases++;
+    }
+    puts("PASS: reproduced headerless live-session suffix at all299 CCCD-enable split points (not fixed)");
     printf("B notification diagnostic invariants: %u cases passed\n", cases);
 }
