@@ -21,6 +21,28 @@ idle acceptance pending**. B remains Stage 2, and 6c/B2 is the backout pair.
 10:04 acceptance hold: TUN2 updated, but switching to TUN3 produced "request
 device information failure". Keep 6b1 unaccepted; no further deployment or
 backout yet while collecting one paired read-only retry.
+10:11 captured comparison: owner reports TUN3 and TUN2 then worked, but TUN1
+produced the same device-information failure. Five-minute paired capture
+completed at `/private/tmp/jk-tun3-capture.LpOhPM/capture.jsonl`
+(A UDP 8,839 B; B USB 27,639 B; MQTT 44,562 B). No further retries requested.
+For failed identity 1, B connected at uptime7518104ms, enabled CCCD7518808,
+received opener0x97 at7518988, and attempted cached replay bits07 at7519079:
+975ms after connection, followed by nine NimBLE notification submissions.
+No subsequent0x96 opener appears; phone disconnected at7524629 (6.525s).
+A's initial bank1 scan575921 failed at580942 (RESP_LINK_DOWN); retry582971
+reached MTU exchange584186/CCCD write584485, after the phone had left.
+Thus real-bank cold-connect latency exceeded this phone attempt. No idle
+disconnect fired during the failed initialization; later normal bank1 idle
+termination occurred at644992. Successful bank3 retry had real fresh summaries.
+The prompt cached replay did not complete phone initialization, but logs prove
+attempts, not successful notification delivery or app acceptance. B currently
+ignores notification return codes and marks device-info seen before allocation/
+submission success; these are existing code flaws, not yet a proven cause of
+this occurrence. No real bank1 stream was established during the failed opener,
+so live-frame/replay interleaving is not supported for this captured instance.
+Next useful diagnostic is B notification-result/cache metadata evidence, not
+more unguided phone retries. Keep 6b1 unaccepted and 6b2/6a deployment held;
+no firmware, battery-setting, reset or backout action during this comparison.
 Stage 5b1 accepted 08:34 after owner TUN2 phone pass and all-bank idle/app=false,
 conn/disc 10/10 at A uptime 335–365 s, OTA/BLE up. Stage 5a3 predecessor retained.
 Live baseline: A Stage 6c explicitly inherits provisional Stage 5b2 and its
