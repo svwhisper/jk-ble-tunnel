@@ -64,6 +64,21 @@ Paired capture opened `/private/tmp/jk-stage10b-capture.vpnacL/capture.jsonl`;
 A6b1 still exact/VALID/unchanged. B phone acceptance pending, accepted10a
 backout retained; no next-stage deployment until that result is recorded.
 
+08:15 owner reports all banks worked but initial TUN1/TUN2 connections were
+much slower: **10b acceptance HOLD / performance test failed**. Do not infer
+causation from sequence alone. First TUN1 connection102171ms, cached devinfo
+submitted103180ms (65ms after0x97), first aligned live devinfo107955ms,
+phone0x96 at108245ms. TUN2 connect120855ms, cache121772ms (56ms after0x97),
+aligned live123787ms,0x96 at124116ms. Thus initial cached devinfo was not
+held by the new boundary gate. Neither initial session logged a settings/cell
+replay after0x96; exact gate-wait versus cancellation/expiry is not logged.
+A concurrently had bank1 and bank2 transaction timeouts, plus bank1 reconnect
+and later radio loss. Time of the phone's actual Status paint is unknown.
+The new gate may affect later fallback, but its responsibility for the
+reported delay is unproven. Restore accepted10a for comparison, not a new fix.
+Accepted10a image hash rechecked. Last capture still shows phone connected
+to2; backout awaits owner disconnect. B10b remains running for now, A unchanged.
+
 ### Stage 10a — isolated B session-start boundary guard, 2026-09-07
 
 Owner authorized proceeding with remediation; B-only change built on diag3.
