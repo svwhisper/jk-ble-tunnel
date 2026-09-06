@@ -89,6 +89,31 @@ hashes and B2/diag1 backout paths in
 Fresh paired capture `/private/tmp/jk-b-notify-diag2-capture.fSXlCA/capture.jsonl`;
 phone comparison pending. No functional fix or stage acceptance inferred.
 
+12:30 diagnostic2 result: owner randomly switched healthy identities1..3 and
+eventually got device-information failure on2. Captured final identity2 session
+128169..134924ms (6.755s); CCCD128922, opener0x97 at129042/linkIDLE, replay07
+at129083 (914ms after connection,41ms after opener). All three300-byte cached
+frames had valid headers/checksums; all900 bytes/nine notifications submitted
+rc0/no allocation failure at MTU517. Devinfo public field occupancy14/3/5 and
+fingerprintA4DC1393 match successful live2 (and this fleet's other identities).
+This excludes missing model/HW/SW fields in the inspected cache; fingerprint
+agreement is not validation of the full300-byte payload or phone acceptance.
+No live2 devinfo or app0x96 appears during the failed final session. A had lost
+bank2 radio at9193543 (0x208), before that attach; scan9201949 failed9206974,
+later retry9215128 connected around9220, after phone departure. No idle
+termination caused this failure. On earlier bank1 session122976..128111,
+cached03/01/02 was followed by app0x96 at126099 without a logged live devinfo
+header in that session, but other live traffic surrounded replay. Therefore
+do not claim replay never works or that any particular counter value is invalid.
+Earlier B audit114359 cleaned vanished identity2 handle5, followed by a new
+identity2 connection/MTU handle7; this is separate from the final captured
+session, not demonstrated as its cause. Logs still cannot prove over-air byte
+delivery, complete app reassembly, full cached semantics or required pacing.
+Next investigation target: cached-handshake delivery/session fidelity, not
+allocation, absent public versions or idle teardown. Stop unguided retries;
+no third diagnostic OTA or functional fix applied on this observation.
+A6b1 remains unaccepted; Bdiag2 remains diagnostic-only, backouts unchanged.
+
 ## Current checkpoint — resumed 2026-09-06
 
 Latest checkpoint: **A Stage 6c / B Stage 2 accepted with the documented
