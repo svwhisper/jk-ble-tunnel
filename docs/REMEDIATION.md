@@ -79,6 +79,18 @@ reported delay is unproven. Restore accepted10a for comparison, not a new fix.
 Accepted10a image hash rechecked. Last capture still shows phone connected
 to2; backout awaits owner disconnect. B10b remains running for now, A unchanged.
 
+08:17 backout completed after owner clarified the app was killed. Fresh
+pre-upload capture already showed conns0/tunnel1, so no active phone session
+was interrupted. Restored accepted B10a to ota_0 (HTTP200,1,114,288B,
+14.448000s), exact ELF6a70c8bd996c916bdde3243b1af3bfc5cd4975d5c235a082bc60037af587d919
+and OTA VALID verified6650ms. Post-boot console14353ms conns0/tunnel1/heap67960.
+Existing10b capture spans this intentional OTA reboot; do not count it as
+an unexplained reset. A6b1 unchanged. B10b is NOT accepted and is no longer
+running; source d815252 remains committed for diagnosis, not deployment.
+Repository HEAD still contains held10b code: do not blindly rebuild/redeploy
+it. Accepted10a image/manifest remains the running B recovery checkpoint.
+Post-backout phone-speed comparison pending; no NVS/BMS-setting changes.
+
 ### Stage 10a — isolated B session-start boundary guard, 2026-09-07
 
 Owner authorized proceeding with remediation; B-only change built on diag3.
