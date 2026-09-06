@@ -45,6 +45,44 @@ Paired five-minute A UDP/B reset-free USB/MQTT capture started at
 Phone acceptance and diagnostic outcome pending. A remains unchanged6b1;
 no progression to6b2/6a and no claim of fixing initialization.
 
+Captured comparison, owner report10:24: TUN1/2/3 worked, then returning to
+TUN1 produced device-information failure. Final failed B session165228..172147ms
+(6.919s): CCCD165965, opener0x97 at166085/linkUP; no live devinfo header logged
+in this session, replay07 at168172 (2.087s after opener). Each300-byte record
+03/01/02 used three128/128/44-byte notifications at MTU517; all900 bytes
+submitted with rc0, no mbuf failures, valid pre-stamp headers/checksums. Counters
+186/181/207 stamped67/68/69. No0x96 followed. Last preceding live notification
+submission166345, 1.827s before replay: no logged concurrent live burst during
+the replay, but a partial earlier frame/app reassembly state is not measured.
+First successful TUN1 session108038 had cached devinfo alone at109044 followed
+by live devinfo110440 and app0x96 at110674; this does NOT prove cached-only
+initialization works. Other successful sessions likewise had fresh live info.
+A bank1 was already connected during the final failure (not a scan delay):
+txn46 timed out1673151, then radio disconnect0x208 at1676303; last decoded cell
+summary arrived10:23:39.644, timeout10:23:42.658, phone departure10:23:45.456,
+radio-disconnect log10:23:45.730. No idle teardown caused the failed attempt.
+rc0 proves host submission only, not controller delivery or app acceptance.
+Cache semantic content, counter handling, chunk delivery/pacing and app parser
+state remain unproven; do not call this an allocation failure or fixed replay.
+Capture ended normally (A11230B/B82125B/MQTT56544B), B conns0/tunnel1/heap69276.
+
+Owner said continue. Diagnostic revision2 prepared locally12:22: compare only
+documented public devinfo model[6..21], HW[22..29], SW[30..37] nonzero counts
+and combined fingerprint on cached/live header chunks. No payload strings or
+fingerprinting of byte38+ (potential secrets), no cache choice/behavior change.
+Red-team: reject adding retry, pacing or counter changes without causal
+evidence; small scalar locals only, same tunnel-task ownership, existing log
+frequency. Test public-field signature independence from all byte38+ values,
+short chunks and byte-exact prior behavior. Tests/build and fresh preflight
+pending before a separately saved B-only diagnostic OTA. A6b1 remains held.
+12:24 revision2 validation passed:35,285 B cases plus full previous suites/16
+updater tests, `/private/tmp/jk-host-tests.GzLrUm`; B build passed/config unchanged.
+Fresh A6b1/Bdiag1 identities/VALID verified; B conns0/tunnel1/heap67512,
+raw USB uptime7441016->7453518ms confirms no reset. Candidate1,112,736B,
+ELF9517f3cfd0bf62bdb606b9bdc96f59a5bb82350348e494a230972e8e47ac2fd2,
+SHA25692ec52e708715c75902f66dd75b5df71737ca66fc7f2c28e2be8934b3dfaec00.
+Preserve revision1 and accepted B2 independently; next update B only.
+
 ## Current checkpoint — resumed 2026-09-06
 
 Latest checkpoint: **A Stage 6c / B Stage 2 accepted with the documented

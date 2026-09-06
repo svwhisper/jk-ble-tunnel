@@ -7,6 +7,7 @@
 #include <string.h>
 #define HOST_ESP_LOG_H
 static char last_log[512];
+static char last_dev_log[512];
 static unsigned log_count;
 static void test_log(const char *tag, const char *fmt, ...)
 {
@@ -14,6 +15,8 @@ static void test_log(const char *tag, const char *fmt, ...)
     va_list ap; va_start(ap, fmt);
     vsnprintf(last_log, sizeof(last_log), fmt, ap);
     va_end(ap); log_count++;
+    if (!strncmp(last_log, "diag dev ", 9))
+        memcpy(last_dev_log, last_log, sizeof(last_dev_log));
 }
 #define ESP_LOGI test_log
 #define ESP_LOGW test_log
@@ -163,6 +166,26 @@ int main(void)
         assert(strstr(last_log, corrupt == 0 ? "hdr=1 sum=1" :
                                 corrupt == 1 ? "hdr=0 sum=0" : "hdr=1 sum=0"));
         cases++;
+    }
+    /* The metadata digest must never depend on byte38+ (potential secrets).
+     * Known public field occupancy and live/replay matching are observed. */
+    reset(); memset(data, 0, sizeof(data));
+    memcpy(data, "\x55\xAA\xEB\x90\x03", 5);
+    memcpy(data + 6, "JK-PB2A16S20P", 12);
+    memcpy(data + 22, "19A", 3); memcpy(data + 30, "19.31", 5);
+    forward_notify(1, 0, data, 128, true);
+    assert(strstr(last_dev_log, "model_nz=12 hw_nz=3 sw_nz=5"));
+    char metadata[512]; memcpy(metadata, last_dev_log, sizeof(metadata));
+    for (unsigned value = 0; value < 256; value++) {
+        reset(); memset(data + 38, value, sizeof(data) - 38);
+        forward_notify(1, 0, data, sizeof(data), true);
+        assert(!strcmp(metadata, last_dev_log)); cases++;
+    }
+    reset(); forward_notify(1, 0, data, 128, false);
+    assert(!strcmp(strstr(metadata, "public_sig="), strstr(last_dev_log, "public_sig=")));
+    for (unsigned len = 5; len < 38; len++) {
+        reset(); forward_notify(1, 0, data, len, true);
+        assert(strstr(last_dev_log, "fields=short")); cases++;
     }
     printf("B notification diagnostic invariants: %u cases passed\n", cases);
 }

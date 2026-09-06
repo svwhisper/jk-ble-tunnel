@@ -29,6 +29,31 @@ static uint16_t s_val_handle;     /* 0xFFE1 value handle (idx 0) */
 static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
                            uint16_t len, bool replay);
 
+/* Compare only the documented public model/hardware/software bytes6..37.
+ * Never fingerprint the remainder: it can contain passwords and passcodes.
+ * Header chunks shorter than38 cannot supply these fields. Observation only;
+ * this does not validate the frame or decide which cache to replay. */
+static void diag_dev_metadata(uint8_t id, bool replay, const uint8_t *data, uint16_t len)
+{
+    if (len < 38) {
+        ESP_LOGI(TAG, "diag dev id=%u src=%s fields=short len=%u",
+                 id, replay ? "replay" : "live", len);
+        return;
+    }
+    uint32_t sig = 2166136261u;
+    unsigned model = 0, hw = 0, sw = 0;
+    for (unsigned k = 6; k < 38; k++) {
+        sig = (sig ^ data[k]) * 16777619u;
+        if (data[k]) {
+            if (k < 22) model++;
+            else if (k < 30) hw++;
+            else sw++;
+        }
+    }
+    ESP_LOGI(TAG, "diag dev id=%u src=%s ctr=%u model_nz=%u hw_nz=%u sw_nz=%u public_sig=%08lX",
+             id, replay ? "replay" : "live", data[5], model, hw, sw, (unsigned long)sig);
+}
+
 /* ---- identity resolution ------------------------------------------------ */
 static int identity_for_conn(uint16_t handle)
 {
@@ -412,6 +437,7 @@ static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
         int64_t now = esp_timer_get_time();
         if (now >= next_error_log_us) { report = true; next_error_log_us = now + 1000000; }
     }
+    if (devinfo) diag_dev_metadata(id, replay, data, len);
     if (report)
         ESP_LOGI(TAG, "diag id=%u src=%s h=%u mtu=%u len=%u calls=%u submitted=%u errors=%u rc=%d off=%d oom=%d",
                  id, replay ? "replay" : "live", it.conn_handle, mtu, len,
