@@ -44,6 +44,18 @@ cc "${flags[@]}" -Wno-unused-parameter -ffunction-sections -Wl,-dead_strip \
    tools/host_test_discovery.c components/jk_proto/jk_proto.c \
    test_board/main/synth_frames.c -o "$test_dir/discovery"
 "$test_dir/discovery"
+# The firmware must fail closed if a local sdkconfig re-enables the hidden
+# NimBLE retry. Test the effective-config guard in both states without radio.
+guard_flags=("${flags[@]}" -Wno-unused-parameter -I tools/host_stubs -I node_a/main
+             -I components/net_util/include -DESP_PLATFORM -fsyntax-only)
+cc "${guard_flags[@]}" '-DMYNEWT_VAL(x)=0' tools/host_test_discovery.c
+if cc "${guard_flags[@]}" '-DMYNEWT_VAL(x)=1' tools/host_test_discovery.c \
+      > "$test_dir/retry-guard.log" 2>&1; then
+    echo "FAIL: Node A allowed hidden NimBLE reconnects" >&2
+    exit 1
+fi
+rg -q 'Node A owns reconnects' "$test_dir/retry-guard.log"
+echo "PASS: Node A effective-config guard rejects hidden reconnects"
 cc -DJK_ENABLE_WRITES=1 -fsanitize=thread -g -Wall -Wextra -Wno-unused-parameter -pthread \
    -ffunction-sections -Wl,-dead_strip -I tools/host_stubs -I node_a/main \
    -I components/common/include -I components/jk_proto/include \

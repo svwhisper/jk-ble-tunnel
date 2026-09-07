@@ -28,6 +28,16 @@
 #include "host/ble_gatt.h"
 #include "host/util/util.h"
 
+/* Retry ownership is part of this state machine's safety contract. The
+ * stack's internal0x3e retry bypasses s_conn_inflight; do not relax the orphan
+ * guard to accommodate it. Check the effective NimBLE setting, not just the
+ * defaults file (an existing sdkconfig can override defaults). */
+#ifdef ESP_PLATFORM
+#if MYNEWT_VAL(BLE_ENABLE_CONN_REATTEMPT)
+#error "Node A owns reconnects: disable CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT"
+#endif
+#endif
+
 static const char *TAG = "ble_owner";
 enum { DSC_NONE, DSC_FFE1, DSC_FFE2, DSC_DONE };
 

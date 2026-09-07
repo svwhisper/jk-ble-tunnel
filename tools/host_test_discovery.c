@@ -2,6 +2,7 @@
  * procedure results. No radio/network/serial I/O exists in these adapters. */
 #include <assert.h>
 #include "synth_frames.h"
+#define HOST_TEST_CONNECT_FLEET 1 /* nonzero dummy addresses; no site credentials */
 #include "../node_a/main/ble_owner.c"
 
 static int response_token, notify_token, decode_token;
@@ -32,6 +33,8 @@ static uint8_t raw_bytes[2 * JK_FRAME_MAX];
 static int64_t frame_time;
 static bms_runtime_t test_runtime[CFG_NUM_UNITS];
 static int dsc_rc, optional_dsc_rc;
+static bool allow_connect;
+static unsigned scan_calls, connect_calls;
 static const struct ble_gatt_error ok = {0}, done = { .status = BLE_HS_EDONE },
                                    error = { .status = 5 };
 int64_t esp_timer_get_time(void) { return test_now; }
@@ -89,9 +92,9 @@ int ble_gap_conn_find(uint16_t ch, struct ble_gap_conn_desc *d)
 { (void)ch; (void)d; return BLE_HS_ENOTCONN; }
 int ble_gap_disc_cancel(void) { return 0; }
 int ble_gap_disc(uint8_t a, int32_t t, const struct ble_gap_disc_params *p, ble_gap_event_fn *cb, void *arg)
-{ (void)a; (void)t; (void)p; (void)cb; (void)arg; assert(0); return 0; }
+{ (void)a; (void)arg; assert(allow_connect && t == 5000 && p->passive == 1 && cb == scan_event); scan_calls++; return 0; }
 int ble_gap_connect(uint8_t a, const ble_addr_t *b, int32_t t, const struct ble_gap_conn_params *p, ble_gap_event_fn *cb, void *arg)
-{ (void)a; (void)b; (void)t; (void)p; (void)cb; (void)arg; assert(0); return 0; }
+{ (void)a; (void)b; (void)p; assert(allow_connect && t == 5000 && cb == gap_event && arg == s_conn_inflight); connect_calls++; return 0; }
 int ble_hs_mbuf_to_flat(const struct os_mbuf *o, void *p, uint16_t n, uint16_t *out)
 { (void)o; (void)p; (void)n; (void)out; assert(0); return 0; }
 void mqtt_publish_llevent(const char *k, uint8_t id, int r)
@@ -106,6 +109,8 @@ int64_t net_wifi_down_ms(void) { return 0; }
 
 static link_t *setup(uint16_t ch)
 {
+    allow_connect = false; scan_calls = connect_calls = 0;
+    s_ble_enabled = false;
     memset(s_links, 0, sizeof(s_links));
     s_connecting = s_conn_inflight = NULL;
     svc_rc = chr_rc = write_rc = optional_write_rc = mtu_rc = terminate_rc = 0;
@@ -243,6 +248,55 @@ int main(void)
 {
     s_mtx_link_pool = xSemaphoreCreateMutex();
     if (test_idle_fence()) return 1;
+    /* Reproduce captured internal retry: its unsolicited CONNECT cannot be
+     * adopted safely after GATT failure. Keep that orphan guard unchanged.
+     * With internal retry disabled, normal disconnect cleanup lets the next
+     * application request scan/connect/discover/subscribe successfully. */
+    for (unsigned handle = 0; handle <= 7; handle += 7) {
+        link_t *retry_link = setup(handle); start(retry_link);
+        struct ble_gatt_error gone = { .status = BLE_HS_ENOTCONN };
+        svc_cb(handle, &gone, NULL, svc_arg);
+        assert(responses == 1 && retry_link->discovery_failed);
+        struct ble_gap_event unsolicited = { .type = BLE_GAP_EVENT_CONNECT,
+            .connect = { .status = 0, .conn_handle = handle } };
+        gap_event(&unsolicited, retry_link);
+        assert(terminate_calls == 2 && svc_calls == 1 && responses == 1);
+
+        /* Config-off path: no unsolicited internal CONNECT, only ordinary
+         * GATT cancellation then GAP DISCONNECT (NimBLE source ordering). */
+        retry_link = setup(handle); start(retry_link);
+        void *old_cookie = svc_arg;
+        svc_cb(handle, &gone, NULL, svc_arg);
+        struct ble_gap_event lost_retry = { .type = BLE_GAP_EVENT_DISCONNECT,
+            .disconnect = { .reason = 0x23e, .conn.conn_handle = handle } };
+        gap_event(&lost_retry, retry_link);
+        assert(!retry_link->in_use && responses == 1);
+        assert(terminate_calls == 1 && !s_conn_inflight);
+
+        allow_connect = true; s_ble_enabled = true; s_scan_active = false;
+        bms_request_t retry = { .bms_id = 1, .kind = TXN_CONNECT,
+            .cmd_id = 43, .timeout_ms = 9000 };
+        exec_request(&retry);
+        assert(scan_calls == 1 && s_connecting && responses == 1);
+        struct ble_gap_event advert = { .type = BLE_GAP_EVENT_DISC };
+        advert.disc.addr.type = BLE_ADDR_PUBLIC;
+        memcpy(advert.disc.addr.val, s_connect_addr, 6);
+        scan_event(&advert, NULL);
+        assert(connect_calls == 1 && s_conn_inflight && !s_connecting);
+        retry_link = s_conn_inflight;
+        struct ble_gap_event connected = { .type = BLE_GAP_EVENT_CONNECT,
+            .connect = { .status = 0, .conn_handle = handle } };
+        gap_event(&connected, retry_link);
+        assert(!s_conn_inflight && retry_link->discovery_pending && svc_calls == 2);
+        on_svc_disc(handle, &gone, NULL, old_cookie);
+        assert(retry_link->discovery_pending && responses == 1);
+        service(retry_link); characteristic(retry_link, JK_CHR_UUID, 10);
+        finish_characteristics(retry_link); ack(retry_link);
+        assert(retry_link->table_ready && last_held && responses == 2);
+        assert(last_response.cmd_id == 43 && last_response.status == RESP_OK);
+        assert(terminate_calls == 1);
+    }
+    puts("PASS: internal reconnect orphan reproduced; scheduler-owned retry/discovery/ACK works for handles0/7");
     /* Immediate start failure, errors, missing service/characteristic. */
     link_t *l = setup(7); svc_rc = 6; start(l); failed(l, RESP_GATT_ERR);
     l = setup(7); start(l); svc_cb(7, &error, NULL, svc_arg); failed(l, RESP_GATT_ERR);

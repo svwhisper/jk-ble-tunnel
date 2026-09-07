@@ -5,6 +5,49 @@ Baseline: `2f34ad805bc31c81da2bafd045f9da89c8cc4dc3`; working branch
 changes from another stage. Each stage gets a commit, saved binaries, tests,
 and an explicit acceptance decision before the next live deployment.
 
+## A reconnect ownership — isolated Stage 5c1, 2026-09-07
+
+Owner authorized proceeding after the restored10a comparison. Red-team choice:
+disable NimBLE's internal connection reattempt on A, leaving A's existing
+scheduler retry, scan duty cycle, backoff, discovery/CCCD ACK gates, slot
+ownership and orphan guard intact. Do not adopt an unsolicited retry by
+weakening stale-callback protection. Pinned ESP-IDF code on0x3e tears down GATT
+and automatically reconnects with a saved callback; the observed successful
+reattempt then arrived without s_conn_inflight and was terminated as an orphan.
+With reattempt disabled, the ordinary GAP disconnect path remains compiled
+and A's next scheduled request owns the complete scan/connect/discovery cycle.
+
+This is a single A configuration change on the currently running6b1 source,
+not acceptance of6b1 or a new B deployment. B stays on restored10a;10b remains
+held. No application callback behavior, timer, BMS command, idle/boot/nightly
+policy, NVS or wire change. Add a compile-time effective-NimBLE-config guard so
+an old local sdkconfig cannot silently override the checked-in default.
+Update both sdkconfig.defaults and this Mac's ignored sdkconfig; a defaults
+change alone would not change an existing build.
+
+Tests reproduce the unsolicited retry's orphan rejection, then exercise
+actual production GATT cancellation/GAP disconnect/request/scan/connect/
+discovery/subscribe-ACK handling and stale-cookie rejection for handles0/7.
+Initial harness attempt used all-zero dummy addresses (disabled targets);
+corrected to nonzero synthetic addresses only in that test, no real site data.
+Effective-config guard tested with retry enabled (must fail compile) and
+disabled (must pass). Full sanitizer/TSan suite,46,263 B notify/12,880 cache/
+16 updater tests pass; log `/private/tmp/jk-a-retry-host-tests-final2.log`,
+executables `/private/tmp/jk-host-tests.5Fq66k`. These are simulated stack
+events plus source/build inspection, not bench radio-fault injection.
+
+A build passed `/private/tmp/jk-a-retry-build.log`. Effective configuration
+diff from pre-build snapshot has exactly reattempt true->false and removal
+of its now-inapplicable max count3; no other key changed. New map contains
+no ble_gap_master_connect_reattempt/ble_gap_reattempt_count symbols. Tracked
+A/component delta from6b1 is only the defaults setting and compile guard;
+held B10b source is not linked into A. Candidate1,211,088B, ELF
+`7927af2873d6bb93a2dfcfa7f2e291b5884d740d676036f0070cf2583676172a`, SHA256
+`d86c415b8897c26cc26b5bfbe36a6b96399b14beefeb2d2a1274bee00d8ce2e9`.
+A6b1 immediate backout and accepted6c fallback hashes rechecked. This will
+not guarantee faster radio establishment, fix failed scans, or make cached-only
+phone initialization reliable. Stage5c1 OTA/boot/phone acceptance pending.
+
 ## B notification diagnostics — owner authorized 2026-09-06 10:12
 
 ### Stage 10b — isolated B replay boundary gate, 2026-09-07
