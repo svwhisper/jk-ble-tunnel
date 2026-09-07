@@ -42,6 +42,14 @@ B build passed:1,114,368B (45% partition headroom), ELF
 Immediate backout is the hash-verified saved B10a image; earlier accepted pair
 also retained. B-only OTA and read-only phone acceptance pending.
 
+17:58 deployed source2c77dca to B ota_1 (HTTP200,1,114,368B,15.015722s).
+Exact candidate ELF/OTA VALID verified6298ms; A5c1 exact/VALID unchanged.
+Candidate/manifest saved at
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260907-stage10c-replay-session`.
+Passive paired capture `/private/tmp/jk-stage10c-capture.PrbALB/capture.jsonl`
+opened at B20824ms. Initial USB buffer contains old-uptime lines: only fresh
+post-boot lines count as current health evidence. Phone acceptance pending.
+
 ## A reconnect ownership — isolated Stage 5c1, 2026-09-07
 
 Owner authorized proceeding after the restored10a comparison. Red-team choice:
