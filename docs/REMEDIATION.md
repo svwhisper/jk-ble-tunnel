@@ -50,6 +50,11 @@ Passive paired capture `/private/tmp/jk-stage10c-capture.PrbALB/capture.jsonl`
 opened at B20824ms. Initial USB buffer contains old-uptime lines: only fresh
 post-boot lines count as current health evidence. Phone acceptance pending.
 
+Fresh B supervisor samples24366..54366ms show heap67924,conns0,tunnel1;
+USB-open status20824->26528ms confirms no control-line reset. No new boot
+failure observed. Captures remain open for normal and early-switch read-only
+phone testing; no claim of application acceptance before the owner reports it.
+
 ## A reconnect ownership — isolated Stage 5c1, 2026-09-07
 
 Owner authorized proceeding after the restored10a comparison. Red-team choice:
