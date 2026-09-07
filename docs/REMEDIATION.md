@@ -48,6 +48,13 @@ A6b1 immediate backout and accepted6c fallback hashes rechecked. This will
 not guarantee faster radio establishment, fix failed scans, or make cached-only
 phone initialization reliable. Stage5c1 OTA/boot/phone acceptance pending.
 
+17:36 deployment: source0b8b526 saved at
+`/Users/dw/Downloads/jk-ble-tunnel-rollback/20260907-stage5c1-retry-owner` and
+uploaded A ota_1 (HTTP200,1,211,088B,22.532548s). Exact candidate ELF/OTA VALID
+verified6194ms. Paired capture
+`/private/tmp/jk-stage5c1-capture.cRYKRe/capture.jsonl` opened at A18254ms;
+B10a exact/VALID unchanged. Boot-frame verification and phone test pending.
+
 ## B notification diagnostics — owner authorized 2026-09-06 10:12
 
 ### Stage 10b — isolated B replay boundary gate, 2026-09-07
