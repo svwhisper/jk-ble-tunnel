@@ -147,15 +147,16 @@ static void dispatch(uint8_t id)
         return;
     }
 
-    bms_request_t out;
-    ring_pop(p, &out);
+    /* Keep the head in place until the BLE queue accepts its copy. Removing
+     * then appending on saturation rotates the FIFO and changes wire order. */
+    bms_request_t out = *r;
     out.cmd_id = p->next_cmd_id + 1;
     if (xQueueSend(g_q_bms_request, &out, pdMS_TO_TICKS(20)) == pdTRUE) {
         p->next_cmd_id = p->active_cmd_id = out.cmd_id;
         p->busy = true;
+        ring_pop(p, &out);
     } else {
-        ring_push(p, &out);   /* couldn't dispatch; requeue, retry next tick */
-        ESP_LOGW(TAG, "bms %u req queue full, requeued", id);
+        ESP_LOGW(TAG, "bms %u req queue full, pending head retained", id);
     }
 }
 

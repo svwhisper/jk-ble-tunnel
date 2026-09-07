@@ -200,6 +200,9 @@ int main(void)
     assert(s_pend[1].ring[s_pend[1].head].payload[0] != 2);
 #else
     assert(s_pend[1].ring[s_pend[1].head].payload[0] == 2);
+    pend_t retained = s_pend[1];
+    for (unsigned i=0; i<100; i++) tick();
+    assert(!memcmp(&retained, &s_pend[1], sizeof(retained)));
     while (requests.count) assert(take().bms_id == 99);
     for (unsigned i=2; i<=4; i++) {
         tick(); bms_request_t r = take(); assert(r.payload[0] == i);
@@ -208,6 +211,26 @@ int main(void)
     }
 #endif
     tests++;
+#ifndef FLOW_LEGACY_FIFO
+    /* Repeatedly wrap the physical FIFO with maximum pending depth. */
+    for (unsigned round=0; round<32; round++) {
+        reset(); submit(1, 0); active = take();
+        for (unsigned i=1; i<=PEND_DEPTH; i++) submit(1, i);
+        assert(s_pend[1].count == PEND_DEPTH);
+        for (unsigned i=0; i<PEND_DEPTH; i++) {
+            /* Saturate, complete, retain, drain, and resume in exact order. */
+            for (unsigned j=0; j<requests.capacity; j++)
+                assert(xQueueSend(&requests, &filler, 0) == pdTRUE);
+            complete(active, RESP_OK);
+            assert(s_pend[1].count == PEND_DEPTH-i);
+            while (requests.count) assert(take().bms_id == 99);
+            tick(); active = take(); assert(active.payload[0] == i+1);
+            tests++;
+        }
+        complete(active, RESP_OK);
+        assert(!requests.count && !s_pend[1].busy && !s_pend[1].count);
+    }
+#endif
     printf("PASS: %u deterministic production arbiter/queue/clock scenarios", tests);
 #ifdef FLOW_LEGACY_CORRELATION
     printf(" (stale-completion defect expected)");

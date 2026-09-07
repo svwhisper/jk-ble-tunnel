@@ -16,6 +16,8 @@ Log: `/private/tmp/jk-r0-flow.log`.
 
 ## R1a — exact arbiter completion identity
 
+Checkpoint `97c9ba8`, predecessor `946bd3c`.
+
 Red-team boundary: accepting any response can falsely make a busy bank idle.
 Fix this local identity invariant without touching bootstrap, replay, retry
 timers, wire protocol, radio settings or session cancellation. A stores the
@@ -41,6 +43,22 @@ This directory is **not** a deployment approval or accepted rollback image.
 This does **not** repair wrong-type JK completion, late ATT callback identity,
 lost completion under response-queue saturation or phone-session cancellation.
 Historical defect reproducers that assert old behavior are not post-fix tests.
+
+## R1b — retain FIFO head until admission
+
+Predecessor `97c9ba8`. The pending ring now removes its head only after the BLE
+queue accepts a copy. Saturation no longer rotates commands or consumes an id.
+No queue sizes, timers, bootstrap clearing or overload reporting were changed.
+
+Full native suite passes, including 270 deterministic arbiter/queue scenarios:
+100 blocked retry ticks retain identical state and 32 full-ring cycles preserve
+order through repeated saturation/drain/resume. Neither flow test now expects
+a legacy defect. A firmware build passes with the same sdkconfig hash. Image
+SHA256 `c92c8eae50ab6563d7b5a565eabdc720b6abb41d1e32800122bdf3fe6cbba218`.
+Validation artifacts: `/Users/dw/Downloads/jk-ble-tunnel-local/20260907-r1b/`.
+Logs: `/private/tmp/jk-r1b-host.log`, `/private/tmp/jk-r1b-build.log`.
+Still local only; whole-ring bootstrap CLEAR and full-ring admission reporting
+remain unresolved and must not be conflated with this ordering fix.
 
 ## Backout / next attended gate
 
