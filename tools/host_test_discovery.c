@@ -34,6 +34,10 @@ static int64_t frame_time;
 static bms_runtime_t test_runtime[CFG_NUM_UNITS];
 static int dsc_rc, optional_dsc_rc;
 static bool allow_connect;
+static bool allow_no_rsp;
+static const uint8_t *rx_bytes;
+static bool allow_raw_publish;
+static unsigned raw_publishes;
 static unsigned scan_calls, connect_calls;
 static const struct ble_gatt_error ok = {0}, done = { .status = BLE_HS_EDONE },
                                    error = { .status = 5 };
@@ -85,7 +89,7 @@ int ble_gattc_write_flat(uint16_t ch, uint16_t handle, const void *value, uint16
     write_calls++; return handle == 21 ? optional_write_rc : write_rc;
 }
 int ble_gattc_write_no_rsp_flat(uint16_t ch, uint16_t h, const void *v, uint16_t n)
-{ (void)ch; (void)h; (void)v; (void)n; assert(0); return 0; }
+{ (void)ch; (void)v; (void)n; assert(allow_no_rsp); write_calls++; written_handle=h; return write_rc; }
 int ble_gap_terminate(uint16_t ch, uint8_t reason)
 { (void)ch; assert(reason == BLE_ERR_REM_USER_CONN_TERM); terminate_calls++; return terminate_rc; }
 int ble_gap_conn_find(uint16_t ch, struct ble_gap_conn_desc *d)
@@ -96,20 +100,28 @@ int ble_gap_disc(uint8_t a, int32_t t, const struct ble_gap_disc_params *p, ble_
 int ble_gap_connect(uint8_t a, const ble_addr_t *b, int32_t t, const struct ble_gap_conn_params *p, ble_gap_event_fn *cb, void *arg)
 { (void)a; (void)b; (void)p; assert(allow_connect && t == 5000 && cb == gap_event && arg == s_conn_inflight); connect_calls++; return 0; }
 int ble_hs_mbuf_to_flat(const struct os_mbuf *o, void *p, uint16_t n, uint16_t *out)
-{ (void)o; (void)p; (void)n; (void)out; assert(0); return 0; }
+{ assert(rx_bytes && o->len >= n); memcpy(p, rx_bytes, n); if (out) *out=n; return 0; }
 void mqtt_publish_llevent(const char *k, uint8_t id, int r)
 {
     (void)k; (void)id; (void)r;
     assert(pthread_mutex_trylock(s_mtx_link_pool) == 0);
     assert(pthread_mutex_unlock(s_mtx_link_pool) == 0);
 }
-void mqtt_publish_raw(uint8_t id, const uint8_t *d, uint16_t n) { (void)id; (void)d; (void)n; assert(0); }
+void mqtt_publish_raw(uint8_t id, const uint8_t *d, uint16_t n)
+{
+    assert(allow_raw_publish && id==1 && n<=256 && !memcmp(d,rx_bytes,n));
+    assert(pthread_mutex_trylock(s_mtx_link_pool)==0);
+    assert(pthread_mutex_unlock(s_mtx_link_pool)==0);
+    raw_publishes++;
+}
 bool net_wifi_up(void) { return true; }
 int64_t net_wifi_down_ms(void) { return 0; }
 
 static link_t *setup(uint16_t ch)
 {
     allow_connect = false; scan_calls = connect_calls = 0;
+    allow_no_rsp = false; rx_bytes = NULL;
+    allow_raw_publish=false; raw_publishes=0;
     s_ble_enabled = false;
     memset(s_links, 0, sizeof(s_links));
     s_connecting = s_conn_inflight = NULL;

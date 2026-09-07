@@ -1,12 +1,11 @@
 /*
- * ble_owner.c — NimBLE central. Structure is complete and faithful to the
- * NimBLE host API; the lines tagged `NIMBLE-PASS` need a compile/link check
- * against the pinned ESP-IDF next week (exact arg structs, HS error handling).
- * Nothing here writes BMS settings — that path is gated in jk_proto.
+ * ble_owner.c — NimBLE central, built against the pinned ESP-IDF. Validated
+ * settings and raw app writes are executed here; policy belongs to arbiter.
  *
  * Threading: NimBLE host callbacks run on the host task. They only touch their
- * own link's reassembler and post to queues. ble_owner_task performs the
- * connect/write side under mtx_link_pool. Snapshot copies cross the boundary.
+ * link state/reassembly under mtx_link_pool and post copied queue items.
+ * ble_owner_task performs the connect/write side under the same mutex.
+ * Optional MQTT diagnostics still need off-task publication (R6).
  */
 #include <string.h>
 #include <stdarg.h>
@@ -68,6 +67,9 @@ typedef struct {
     bms_request_t txn;
     int64_t   txn_deadline_us;
     uint8_t   want_record;    /* record we expect back for a POLL            */
+    bool      poll_record_seen;
+    uint32_t  write_cookie;   /* immutable callback token, never slot address */
+    uint16_t  write_handle;   /* selected ATT attribute for this operation */
     uint8_t   timeout_strikes;/* consecutive txn timeouts on this link       */
     int64_t   renegotiate_at_us; /* central-initiated param update pending    */
 } link_t;
@@ -75,6 +77,9 @@ typedef struct {
 static link_t s_links[CFG_LINK_POOL_SIZE];
 static SemaphoreHandle_t s_mtx_link_pool;
 static uint32_t s_discovery_cookie;
+/* Opaque callback arg must fit the ESP32's pointer width. Never reuse a write
+ * token within a boot; exhaustion rejects new Write Requests, not aliases. */
+static uint32_t s_write_cookie;
 
 /* One scan/connect in flight at a time (scanning is a global radio resource).
  * The arbiter serialises per-BMS work, so this is rarely contended.
@@ -250,12 +255,14 @@ void ble_owner_keepalive_read(void)
 /* ---- raw-frame capture (jkbms/bridge/cmd/rawcap) ------------------------ */
 /* While armed, publish every raw notify chunk to jkbms/<id>/raw as hex, so the
  * real JK frame layout can be captured remotely to pin decode offsets (O-1). */
-static volatile int64_t s_rawcap_until_us;
+static int64_t s_rawcap_until_us; /* link-pool mutex */
 void ble_owner_rawcap(int seconds)
 {
     if (seconds < 1)   seconds = 20;
     if (seconds > 120) seconds = 120;
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
     s_rawcap_until_us = esp_timer_get_time() + (int64_t)seconds * 1000000LL;
+    xSemaphoreGive(s_mtx_link_pool);
     ESP_LOGW(TAG, "raw-frame capture armed for %ds", seconds);
 }
 
@@ -324,6 +331,14 @@ static void set_link_state(uint8_t id, tunnel_link_state_t s, bool held)
 }
 
 /* ---- notify path (host task) ------------------------------------------- */
+static void complete_poll_if_ready(link_t *l)
+{
+    if (l->txn_active && l->txn.kind == TXN_POLL && l->poll_record_seen && !l->write_cookie) {
+        l->txn_active = false;
+        respond(l->bms_id, l->txn.cmd_id, RESP_OK, NULL, 0, l->want_record);
+    }
+}
+
 static void on_complete_frame(link_t *l, const uint8_t *frame, uint16_t flen)
 {
     l->timeout_strikes = 0;   /* the unit is talking — clear the §11 strikes */
@@ -339,20 +354,17 @@ static void on_complete_frame(link_t *l, const uint8_t *frame, uint16_t flen)
 
     /* Arbiter uses result metadata, never the frame pointer. Do not queue a
      * borrowed pointer which the next reassembly call can overwrite. */
-    if (l->txn_active && l->txn.kind == TXN_POLL) {
-        jk_record_t rec = jk_frame_record(frame, flen);
-        l->txn_active = false;
-        respond(l->bms_id, l->txn.cmd_id, RESP_OK, NULL, 0, rec);
+    jk_record_t rec = jk_frame_record(frame, flen);
+    if (l->txn_active && l->txn.kind == TXN_POLL && rec == l->want_record) {
+        l->poll_record_seen = true;
+        /* Data can beat the ATT ACK. Do not release the next Write Request
+         * into a still-outstanding ATT procedure on this connection. */
+        complete_poll_if_ready(l);
     }
 }
 
 static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
 {
-    /* Raw capture (O-1): dump the chunk as received, before reassembly — so we
-     * see the real bytes even if reassembly itself is mismatched. */
-    if (esp_timer_get_time() < s_rawcap_until_us)
-        mqtt_publish_raw(l->bms_id, data, len);
-
     /* App transparency (spec §6): while an app holds this identity, forward
      * the chunk VERBATIM (TUN_RAW) before reassembly, preserving wire order.
      * The real stream carries AT heartbeats and AA5590EB C8 command-acks that
@@ -740,39 +752,45 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return 0;
     }
     case BLE_GAP_EVENT_NOTIFY_RX: {
+        uint8_t tmp[256]; uint16_t n = OS_MBUF_PKTLEN(event->notify_rx.om);
+        if (n > sizeof(tmp)) n = sizeof(tmp);
+        if (ble_hs_mbuf_to_flat(event->notify_rx.om, tmp, n, NULL) != 0) return 0;
+        uint8_t capture_id = 0xFF;
+        xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
         link_t *l = link_by_conn(event->notify_rx.conn_handle);
         if (l) {
-            /* Copy the mbuf out on the host stack, then reassemble. */
-            uint8_t tmp[256]; uint16_t n = OS_MBUF_PKTLEN(event->notify_rx.om);
-            if (n > sizeof(tmp)) n = sizeof(tmp);
-            ble_hs_mbuf_to_flat(event->notify_rx.om, tmp, n, NULL);    /* NIMBLE-PASS */
+            if (esp_timer_get_time() < s_rawcap_until_us) capture_id = l->bms_id;
             on_notify(l, tmp, n);
         }
+        xSemaphoreGive(s_mtx_link_pool);
+        /* Raw bytes were copied before reassembly. Diagnostic publication
+         * follows processing, outside the transaction critical section. */
+        if (capture_id != 0xFF) mqtt_publish_raw(capture_id, tmp, n);
         return 0;
     }
     default: return 0;
     }
 }
 
-/* GATT write completion for app/balance writes (host task). The ATT-layer ack
- * IS the response for a write-with-response — JK's protocol-level reply (C8
- * ack, records) arrives as notifications, which the transparent TUN_RAW path
- * forwards to the app. Without this completion the txn could never finish:
- * the §11 sweeper then terminated the BMS link at timeout_ms, and the repeated
- * WRITE_RESULT timeouts tripped Node B's WRITE_FAIL_LIMIT, dropping the app
- * ("cell info briefly, then blank", 2026-08-28). */
+/* ATT completion is operation-local, not proof a BMS applied settings or the
+ * phone accepted a reply. Polls still wait for their expected JK record. */
 static int on_gatt_write_done(uint16_t conn_handle, const struct ble_gatt_error *error,
                               struct ble_gatt_attr *attr, void *arg)
 {
-    (void)attr; (void)arg;
+    uint32_t cookie = (uint32_t)(uintptr_t)arg;
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
     link_t *l = link_by_conn(conn_handle);
-    if (l && l->txn_active &&
-        (l->txn.kind == TXN_RAW_WRITE || l->txn.kind == TXN_BALANCE_WRITE)) {
-        l->txn_active = false;
-        respond(l->bms_id, l->txn.cmd_id,
-                (error && error->status != 0) ? RESP_GATT_ERR : RESP_OK,
-                NULL, 0, JK_REC_NONE);
+    if (l && cookie && cookie == l->write_cookie) {
+        bool ok = error && error->status == 0 && attr && attr->handle == l->write_handle;
+        l->write_cookie = 0; /* consume ACK once, even while a poll awaits data */
+        if (!l->txn_active) {
+            /* Local timeout already emitted the terminal result. Retiring
+             * the old ATT procedure makes the link eligible again. */
+        } else if (!ok || l->txn.kind != TXN_POLL) {
+            l->txn_active = false;
+            respond(l->bms_id, l->txn.cmd_id, ok ? RESP_OK : RESP_GATT_ERR,
+                    NULL, 0, JK_REC_NONE);
+        } else complete_poll_if_ready(l);
     }
     xSemaphoreGive(s_mtx_link_pool);
     return 0;
@@ -781,7 +799,7 @@ static int on_gatt_write_done(uint16_t conn_handle, const struct ble_gatt_error 
 /* ---- transaction execution (ble_owner_task) ---------------------------- */
 /* Scan callback: match the target BMS by advertised name, then connect to
  * whatever address it advertised (spec §5 — match on name, never MAC). */
-static int scan_event(struct ble_gap_event *event, void *arg)
+static int scan_event_locked(struct ble_gap_event *event, void *arg)
 {
     switch (event->type) {
     case BLE_GAP_EVENT_DISC: {
@@ -835,6 +853,14 @@ static int scan_event(struct ble_gap_event *event, void *arg)
     }
 }
 
+static int scan_event(struct ble_gap_event *event, void *arg)
+{
+    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
+    int rc = scan_event_locked(event, arg);
+    xSemaphoreGive(s_mtx_link_pool);
+    return rc;
+}
+
 static void start_connect(link_t *l)
 {
     const char *name = name_for(l->bms_id);
@@ -872,6 +898,37 @@ static void start_connect(link_t *l)
     }
 }
 
+/* Called under the pool mutex. Selected ATT operation determines completion,
+ * not whether the phone requested an ACK on its separate connection to B. */
+static void submit_write(link_t *l, const bms_request_t *req, uint16_t handle,
+                         bool write_request, const uint8_t *data, uint16_t len,
+                         jk_record_t expected)
+{
+    if (write_request && s_write_cookie == UINT32_MAX) {
+        respond(req->bms_id, req->cmd_id, RESP_REJECTED, NULL, 0, JK_REC_NONE);
+        return;
+    }
+    l->txn = *req;
+    l->txn_active = write_request || req->kind == TXN_POLL;
+    l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
+    l->want_record = expected;
+    l->poll_record_seen = false;
+    l->write_handle = handle;
+    l->write_cookie = write_request ? ++s_write_cookie : 0;
+    int rc = write_request
+        ? ble_gattc_write_flat(l->conn_handle, handle, data, len,
+                              on_gatt_write_done, (void *)(uintptr_t)l->write_cookie)
+        : ble_gattc_write_no_rsp_flat(l->conn_handle, handle, data, len);
+    if (rc) {
+        l->txn_active = false;
+        l->write_cookie = 0;
+        respond(req->bms_id, req->cmd_id, RESP_GATT_ERR, NULL, 0, JK_REC_NONE);
+    } else if (!l->txn_active) {
+        /* Write Command: only local submission is observable at ATT level. */
+        respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
+    }
+}
+
 static void exec_request(const bms_request_t *req)
 {
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
@@ -891,6 +948,15 @@ static void exec_request(const bms_request_t *req)
         }
     }
 
+    if (l && l->table_ready && (l->txn_active ||
+        (l->write_cookie && req->kind != TXN_DISCONNECT))) {
+        /* Defence in depth: never overwrite even if upstream loses its gate.
+         * A locally timed-out ATT procedure keeps its lease until the stack
+         * callback or disconnect. An explicit teardown remains possible once
+         * the transaction has timed out. Discovery/scan statuses are unchanged. */
+        respond(req->bms_id, req->cmd_id, RESP_REJECTED, NULL, 0, JK_REC_NONE);
+        xSemaphoreGive(s_mtx_link_pool); return;
+    }
     if (req->kind == TXN_CONNECT) {
         if (l && (l->discovery_pending || l->discovery_failed)) {
             /* A physical connection is not a ready JK link. Keep the original
@@ -924,52 +990,24 @@ static void exec_request(const bms_request_t *req)
         respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
         break;
     case TXN_POLL: {
+        jk_record_t expected = req->opcode == JK_CMD_DEVICE_INFO ? JK_REC_DEVICE_INFO
+                             : req->opcode == JK_CMD_CELL_INFO ? JK_REC_CELL_INFO
+                             : JK_REC_NONE;
+        if (expected == JK_REC_NONE) {
+            respond(req->bms_id, req->cmd_id, RESP_REJECTED, NULL, 0, JK_REC_NONE);
+            break;
+        }
         uint8_t cmd[JK_CMD_FRAME_LEN];
         int n = jk_build_read_cmd(req->opcode, cmd, sizeof(cmd));
-        l->txn_active = true; l->txn = *req;
-        l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
-        int rc = ffe1_needs_write_cmd(l)
-               ? ble_gattc_write_no_rsp_flat(l->conn_handle, l->val_handle, cmd, n)
-               : ble_gattc_write_flat(l->conn_handle, l->val_handle, cmd, n, NULL, NULL); /* NIMBLE-PASS */
-        if (rc) {   /* proc-pool exhaustion etc: fail LOUDLY, don't fake a txn */
-            l->txn_active = false;
-            ESP_LOGW(TAG, "poll 0x%02x write bms %u rc=%d", req->opcode, req->bms_id, rc);
-            respond(req->bms_id, req->cmd_id, RESP_GATT_ERR, NULL, 0, JK_REC_NONE);
-        }
+        submit_write(l, req, l->val_handle, !ffe1_needs_write_cmd(l), cmd, n, expected);
         break;
     }
     case TXN_RAW_WRITE: {
-        /* App write relayed verbatim. idx 1 = the FFE2 command characteristic
-         * (the clone mirrors it); everything else = FFE1. FFE1 write-with-rsp
-         * completion = ATT write ack (on_gatt_write_done). Op per discovered
-         * props — see ffe1_needs_write_cmd/ffe2_needs_write_req. */
-        if (req->idx == 1 && l->ffe2_handle) {
-            int wrc = ffe2_needs_write_req(l)
-                    ? ble_gattc_write_flat(l->conn_handle, l->ffe2_handle,
-                                           req->payload, req->payload_len, NULL, NULL)
-                    : ble_gattc_write_no_rsp_flat(l->conn_handle, l->ffe2_handle,
-                                                  req->payload, req->payload_len); /* NIMBLE-PASS */
-            if (wrc) ESP_LOGW(TAG, "ffe2 write bms %u rc=%d", req->bms_id, wrc);
-            respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
-            break;
-        }
-        if (ffe1_needs_write_cmd(l)) {      /* no ATT ack exists for a Write Command */
-            int wrc = ble_gattc_write_no_rsp_flat(l->conn_handle, l->val_handle,
-                                                  req->payload, req->payload_len);
-            respond(req->bms_id, req->cmd_id, wrc ? RESP_GATT_ERR : RESP_OK,
-                    NULL, 0, JK_REC_NONE);
-            break;
-        }
-        l->txn_active = req->response_needed; l->txn = *req;
-        l->txn_deadline_us = esp_timer_get_time() + req->timeout_ms * 1000LL;
-        int rc = ble_gattc_write_flat(l->conn_handle, l->val_handle, req->payload,
-                             req->payload_len, on_gatt_write_done, NULL);   /* NIMBLE-PASS */
-        if (rc) {
-            l->txn_active = false;
-            ESP_LOGW(TAG, "raw write bms %u rc=%d", req->bms_id, rc);
-            respond(req->bms_id, req->cmd_id, RESP_GATT_ERR, NULL, 0, JK_REC_NONE);
-        } else if (!req->response_needed)
-            respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
+        /* Preserve property-aware selection and existing absent-FFE2 fallback. */
+        bool ffe2 = req->idx == 1 && l->ffe2_handle;
+        submit_write(l, req, ffe2 ? l->ffe2_handle : l->val_handle,
+                     ffe2 ? ffe2_needs_write_req(l) : !ffe1_needs_write_cmd(l),
+                     req->payload, req->payload_len, JK_REC_NONE);
         break;
     }
     case TXN_BALANCE_WRITE: {
@@ -985,14 +1023,8 @@ static void exec_request(const bms_request_t *req)
             respond(req->bms_id, req->cmd_id, RESP_GATT_ERR, NULL, 0, JK_REC_NONE);
             break;
         }
-        int wrc = ffe1_needs_write_cmd(l)
-                ? ble_gattc_write_no_rsp_flat(l->conn_handle, l->val_handle,
-                                              req->payload, req->payload_len)
-                : ble_gattc_write_flat(l->conn_handle, l->val_handle,
-                                       req->payload, req->payload_len, NULL, NULL); /* NIMBLE-PASS */
-        if (wrc) ESP_LOGW(TAG, "balance write bms %u rc=%d", req->bms_id, wrc);
-        respond(req->bms_id, req->cmd_id, wrc ? RESP_GATT_ERR : RESP_OK,
-                NULL, 0, JK_REC_NONE);
+        submit_write(l, req, l->val_handle, !ffe1_needs_write_cmd(l),
+                     req->payload, req->payload_len, JK_REC_NONE);
         break;
     }
     default: break;
