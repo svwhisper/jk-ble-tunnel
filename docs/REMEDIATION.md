@@ -55,6 +55,15 @@ verified6194ms. Paired capture
 `/private/tmp/jk-stage5c1-capture.cRYKRe/capture.jsonl` opened at A18254ms;
 B10a exact/VALID unchanged. Boot-frame verification and phone test pending.
 
+17:37 boot check: all four banks reported fresh-frame verification ok at39s.
+The capture contains a natural bank1 connection-establishment failure during
+discovery (rc7), followed by ordinary GAP disconnect0x23e at26765ms and a
+scheduler-owned retry; no "Reattempt connection" or "orphan connect" logged.
+This exercises the intended config-off cleanup path on hardware without
+fault injection. Other transaction timeouts and bank2 radio0x208 at49615ms
+remain; do not claim the radio or cached-only phone problem solved. B10a
+unchanged/no USB reset, conns0/tunnel1. Phone switching/live-value test pending.
+
 ## B notification diagnostics — owner authorized 2026-09-06 10:12
 
 ### Stage 10b — isolated B replay boundary gate, 2026-09-07
