@@ -74,3 +74,4 @@ cc -fsanitize=thread -g -Wall -Wextra -pthread -I tools/host_stubs \
    -I components/common/include -I node_b/main tools/host_test_b_cache.c -o "$test_dir/b_cache_tsan"
 "$test_dir/b_cache_tsan"
 echo "Test executables preserved at $test_dir"
+bash tools/run_flow_tests.sh

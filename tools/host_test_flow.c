@@ -171,6 +171,24 @@ int main(void)
         tests++;
     }
 
+#ifndef FLOW_LEGACY_CORRELATION
+    /* No alias at the old 16-bit boundary, and fail closed at true exhaustion. */
+    const bms_cmd_id_t starts[] = { UINT16_MAX-1, UINT32_MAX, UINT64_MAX-1 };
+    for (unsigned i=0; i<sizeof(starts)/sizeof(starts[0]); i++) {
+        reset(); s_pend[1].next_cmd_id = starts[i];
+        submit(1, 1); bms_request_t r = take();
+        assert(r.cmd_id == starts[i]+1 && r.cmd_id != 0);
+        complete(r, RESP_OK);
+        complete(r, RESP_LINK_DOWN); /* duplicate while idle is also inert */
+        assert(!s_pend[1].busy && s_pend[1].backoff_ms == 0);
+        if (starts[i] == UINT64_MAX-1) {
+            submit(1, 2); tick();
+            assert(!requests.count && s_pend[1].count == 1 && !s_pend[1].busy);
+        }
+        tests++;
+    }
+#endif
+
     /* A full BLE queue must leave the oldest pending request at the head. */
     reset(); submit(1, 1); bms_request_t active = take();
     submit(1, 2); submit(1, 3); submit(1, 4);

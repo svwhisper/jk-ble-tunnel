@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 flow_dir=$(mktemp -d /private/tmp/jk-flow-tests.XXXXXX)
 flow_idf=${IDF_PATH:-/Users/dw/esp/esp-idf}
 # R0 explicitly records defects; each isolated R1 checkpoint removes its define.
-flow_expectations=(-DFLOW_LEGACY_CORRELATION -DFLOW_LEGACY_FIFO)
+flow_expectations=(-DFLOW_LEGACY_FIFO)
 cc -DJK_ENABLE_WRITES=1 "${flow_expectations[@]}" \
   -fsanitize=address,undefined -g -Wall -Wextra -Wno-unused-parameter -pthread \
   -I tools/host_stubs -I node_a/main -I components/common/include \

@@ -2,6 +2,17 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-09-07 overnight — LOCAL flow-control remediation, NO OTA
+
+Owner authorized unattended local work from 22:30 after the complete review.
+Current contract: `docs/FLOW_CONTROL_CONTRACT.md`; checkpoint/test handoff:
+`docs/OVERNIGHT_FLOW_WORK.md`. Work is isolated on
+`flow-control-local-20260907`; deployment branch and all saved rollback images
+are preserved. Recorded live pair remains A5c1 / B10c **HOLD/not accepted**.
+Do not mistake local build output or passing host tests for phone acceptance.
+The later review supersedes historical claims below that transport is exonerated,
+cache age implies freshness, or unverified settings retries are automatically safe.
+
 ## BMS 0 REPLACEMENT INBOUND (owner, 2026-09-03; arrives ~w/c 2026-09-07)
 Unit 0 is hardware-confirmed bad (re-wedged even after power cycles); the
 deep investigation is MOOT. Swap checklist when the new unit lands:

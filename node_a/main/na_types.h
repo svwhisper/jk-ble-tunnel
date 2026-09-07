@@ -30,10 +30,14 @@ typedef enum {
 
 #define REQ_PAYLOAD_MAX TUNNEL_MAX_WRITE_DATA
 
+/* Local queue identity only: never serialized on TCP/MQTT or persisted.
+ * Zero is reserved; the arbiter does not reuse ids within a boot. */
+typedef uint64_t bms_cmd_id_t;
+
 /* q_bms_request item (arbiter -> ble_owner). */
 typedef struct {
     uint8_t      bms_id;
-    uint16_t     cmd_id;     /* correlates the response                     */
+    bms_cmd_id_t cmd_id;     /* exact local operation identity              */
     txn_kind_t   kind;
     req_source_t source;
     uint8_t      opcode;     /* for TXN_POLL: JK_CMD_*                       */
@@ -59,7 +63,7 @@ typedef enum {
  * never as a borrowed pointer into the mutable reassembly buffer. */
 typedef struct {
     uint8_t       bms_id;
-    uint16_t      cmd_id;
+    bms_cmd_id_t  cmd_id;
     resp_status_t status;
     const uint8_t *frame;
     uint16_t      frame_len;

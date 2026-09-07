@@ -7,6 +7,7 @@
  */
 #include <string.h>
 #include <math.h>
+#include <inttypes.h>
 #include "arbiter.h"
 #include "queues.h"
 #include "config.h"
@@ -59,7 +60,8 @@ typedef struct {
     bms_request_t ring[PEND_DEPTH];
     uint8_t head, tail, count;
     bool     busy;              /* a transaction is outstanding on the link  */
-    uint16_t next_cmd_id;
+    bms_cmd_id_t next_cmd_id;
+    bms_cmd_id_t active_cmd_id; /* valid only while busy; never a link event */
     int64_t  link_wait_deadline_us; /* app-write link-up guard (0 = inactive) */
     int64_t  connect_after_us;  /* backoff: don't attempt a connect before this */
     uint32_t backoff_ms;        /* current per-unit backoff, doubles on failure */
@@ -114,6 +116,9 @@ static void dispatch(uint8_t id)
     if (esp_timer_get_time() < pgate->dispatch_after_us) return;  /* rate limit */
     pend_t *p = &s_pend[id];
     if (p->busy || !p->count) return;
+    /* Never alias a delayed response after sequence exhaustion. Queue ids are
+     * local and all queues disappear on reboot; no wire-format change. */
+    if (p->next_cmd_id == UINT64_MAX) return;
 
     /* Peek the head to decide if it may run now. */
     bms_request_t *r = &p->ring[p->head];
@@ -134,18 +139,21 @@ static void dispatch(uint8_t id)
                             .source = SRC_INTERNAL, .response_needed = true,
                             /* > the 5 s scan window + discovery, else the §11
                              * sweep kills connects that are still scanning */
-                            .timeout_ms = 9000, .cmd_id = ++p->next_cmd_id };
-        if (xQueueSend(g_q_bms_request, &c, pdMS_TO_TICKS(20)) == pdTRUE)
+                            .timeout_ms = 9000, .cmd_id = p->next_cmd_id + 1 };
+        if (xQueueSend(g_q_bms_request, &c, pdMS_TO_TICKS(20)) == pdTRUE) {
+            p->next_cmd_id = p->active_cmd_id = c.cmd_id;
             p->busy = true;   /* retry next tick if the link queue was full */
+        }
         return;
     }
 
     bms_request_t out;
     ring_pop(p, &out);
-    out.cmd_id = ++p->next_cmd_id;
-    if (xQueueSend(g_q_bms_request, &out, pdMS_TO_TICKS(20)) == pdTRUE)
+    out.cmd_id = p->next_cmd_id + 1;
+    if (xQueueSend(g_q_bms_request, &out, pdMS_TO_TICKS(20)) == pdTRUE) {
+        p->next_cmd_id = p->active_cmd_id = out.cmd_id;
         p->busy = true;
-    else {
+    } else {
         ring_push(p, &out);   /* couldn't dispatch; requeue, retry next tick */
         ESP_LOGW(TAG, "bms %u req queue full, requeued", id);
     }
@@ -324,7 +332,11 @@ static void on_response(const bms_response_t *rsp)
     uint8_t id = rsp->bms_id;
     if (id >= CFG_NUM_UNITS) return;
     pend_t *p = &s_pend[id];
+    /* A result is not a generic link-state observation. Late/duplicate or
+     * unsolicited results cannot release another operation or alter backoff. */
+    if (!p->busy || rsp->cmd_id != p->active_cmd_id) return;
     p->busy = false;
+    p->active_cmd_id = 0;
 
     switch (rsp->status) {
         case RESP_OK:
@@ -346,7 +358,7 @@ static void on_response(const bms_response_t *rsp)
                    if (p->backoff_ms > CFG_RECONNECT_CAP_MS) p->backoff_ms = CFG_RECONNECT_CAP_MS; }
             p->connect_after_us  = esp_timer_get_time() + (int64_t)p->backoff_ms * 1000;
             p->dispatch_after_us = esp_timer_get_time() + 100000;  /* 100 ms */
-            ESP_LOGW(TAG, "bms %u txn cmd=%u status=%d", id, rsp->cmd_id, rsp->status);
+            ESP_LOGW(TAG, "bms %u txn cmd=%" PRIu64 " status=%d", id, rsp->cmd_id, rsp->status);
             break;
         default: break;
     }

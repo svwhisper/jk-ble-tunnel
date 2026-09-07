@@ -302,7 +302,7 @@ static link_t *link_alloc(uint8_t id)
 }
 
 /* response helper -------------------------------------------------------- */
-static void respond(uint8_t bms_id, uint16_t cmd_id, resp_status_t st,
+static void respond(uint8_t bms_id, bms_cmd_id_t cmd_id, resp_status_t st,
                     const uint8_t *frame, uint16_t len, jk_record_t rec)
 {
     bms_response_t r = { .bms_id = bms_id, .cmd_id = cmd_id, .status = st,
