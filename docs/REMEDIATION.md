@@ -55,6 +55,44 @@ USB-open status20824->26528ms confirms no control-line reset. No new boot
 failure observed. Captures remain open for normal and early-switch read-only
 phone testing; no claim of application acceptance before the owner reports it.
 
+18:02 owner acceptance FAIL: first TUN1 blank/no error; TUN2 timeout, retry OK;
+TUN1 OK; TUN3 timeout; final TUN1 timeout. Stage10c is **HOLD/not accepted**,
+still installed with A5c1; no new firmware or automatic rollback in this turn.
+The same cached-only/connection-failure class existed on10a, and10c's observed
+replays are prompt, so this capture does not establish10c as the cause. Avoid
+another reboot/cold-cache change before separating the failure mechanisms.
+Backout remains available; do not silently include10c in any next stage.
+
+Reassembled USB/UDP capture, aligned by receipt time (node uptimes differ):
+
+- Initial TUN1 B126312..156253ms: cached03 submitted73ms after0x97;
+  complete live03 at128754ms, phone0x96 at129010ms, but no settings/cell debt
+  available then. A logs transaction timeouts and later radio0x208. First
+  observed bank1 MQTT summary18:01:08.794 is6.44s after phone departure
+ 18:01:02.353, supporting missing useful status during this attempt, not proof
+  of every over-air byte. Persisted03 survives B boot;01/02 are RAM-only.
+- Failed TUN2 B156679..163423ms: cached03 submitted11ms after0x97, no live
+  startup/phone0x96 in that session. A bank2 service discovery rc7/GAP0x23e.
+  Retry B171803..183134ms got live03 and0x96, matching owner success.
+- Successful TUN1 B183176..194087ms: live03/0x96 then cached01/02 after
+  original2s grace. No new replay hold or submission error observed.
+- Failed TUN3 B194225..201375ms: cached03 submitted11ms after0x97, no live
+  startup/0x96. A scans missed twice; live connection established later.
+  Capture also contains a brief TUN3 retry215010..216735ms with live03/0x96;
+  owner did not explicitly classify that extra visit, so do not invent a pass.
+- Final failed TUN1 B217219..224387ms: cached03/01/02,900B/nine successful
+  host submissions beginning9ms after0x97; no live startup/0x96. A bank1
+  discovery rc7/GAP0x23e twice during the attempt. Cached-only startup again
+  did not suffice, even with all three cached records.
+
+All listed cache headers/checksums valid; diagnostic submission rc0 is not
+proof of over-air delivery or phone acceptance. No logged stale-session abort,
+allocation failure, B reboot or tunnel failure explains these sessions. Exact
+A5c1/B10c identities remain OTA VALID at A1623437/B282047ms. B phone conns0
+after the final departure. Next diagnostic focus: A cold-connect/initial stream
+and phone cached-only handshake, including command scheduling—not another
+unproven B replay patch. No BMS-setting writes or retries requested.
+
 ## A reconnect ownership — isolated Stage 5c1, 2026-09-07
 
 Owner authorized proceeding after the restored10a comparison. Red-team choice:
