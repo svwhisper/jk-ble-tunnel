@@ -26,7 +26,7 @@ static nb_identity_t identity;
 static uint16_t test_mtu;
 static int alloc_fail, notify_fail;
 static unsigned allocs, calls, notes, received_len, cases;
-static uint8_t received[2048], pending_data[320];
+static uint8_t received[1024], pending_data[320];
 static struct os_mbuf mbuf;
 static int64_t now_us = 10000000;
 static nb_cache_t warm[4];
@@ -84,7 +84,6 @@ static void reset(void)
     identity.notify_epoch = 1;
     memset(s_live, 0, sizeof(s_live));
     s_live[1].epoch = 1; s_live[1].aligned = true;
-    s_live[1].replay_safe = true;
     change_session_after_call = -1;
     test_mtu = 185; alloc_fail = notify_fail = -1;
     allocs = calls = notes = received_len = log_count = replay_gets = 0;
@@ -93,132 +92,7 @@ static void reset(void)
 
 int main(void)
 {
-    /* A tunnel tick must not replay between two raw pieces of a live record.
-     * Before Stage10b this inserted the300 cached bytes at offset100. */
-    uint8_t live[300] = {0x55, 0xAA, 0xEB, 0x90, 2};
-    uint8_t live_sum = 0;
-    for (unsigned i = 0; i < 299; i++) live_sum += live[i];
-    live[299] = live_sum;
-    reset(); replay_action = 1; replay_bits = NB_REPLAY_DEVINFO;
-    warm[3].len = 300; memcpy(warm[3].data, live, 300);
-    warm[3].data[4] = 3; warm[3].data[299]++;
-    ble_periph_forward_notify(1, 0, live, 100);
-    ble_periph_replay_tick();
-    assert(received_len == 100 && replay_bits == NB_REPLAY_DEVINFO);
-    ble_periph_forward_notify(1, 0, live + 100, 200);
-    assert(received_len == 300 && !memcmp(received, live, 300));
-    ble_periph_replay_tick();
-    assert(received_len == 600 && replay_bits == 0);
-    puts("PASS: cached device-info deferred to complete live cell record boundary");
     static const uint16_t mtus[] = {0, 23, 64, 131, 185, 512};
-    for (unsigned r = 1; r <= 3; r++) {
-        warm[r].len = 300; memcpy(warm[r].data, live, 300);
-        warm[r].data[4] = r; warm[r].data[299] += r - 2;
-    }
-    static const uint8_t debts[] = {1, 2, 4, 7};
-    for (unsigned m = 0; m < sizeof(mtus)/sizeof(mtus[0]); m++)
-    for (unsigned d = 0; d < sizeof(debts); d++)
-    for (unsigned split = 1; split < 300; split++) {
-        reset(); test_mtu = mtus[m]; replay_action = 1; replay_bits = debts[d];
-        ble_periph_forward_notify(1, 0, live, split);
-        for (unsigned tick = 0; tick < 3; tick++) ble_periph_replay_tick();
-        assert(received_len == split && replay_bits == debts[d] && !replay_gets);
-        ble_periph_forward_notify(1, 0, live + split, 300 - split);
-        assert(s_live[1].replay_safe && received_len == 300);
-        ble_periph_replay_tick();
-        assert(replay_bits == 0 && !memcmp(received, live, 300));
-        unsigned frames = debts[d] == 7 ? 3 : 1;
-        assert(received_len == 300 * (frames + 1));
-        for (unsigned r = 0; r < frames; r++) {
-            const uint8_t *out = received + 300 * (r + 1);
-            assert(!memcmp(out, "\x55\xAA\xEB\x90", 4));
-            assert(out[4] == replay_order[r]);
-            uint8_t sum = 0;
-            for (unsigned k = 0; k < 299; k++) sum += out[k];
-            assert(out[299] == sum);
-        }
-        cases++;
-    }
-    /* Same raw notification may contain a heartbeat prefix, full record,
-     * and an auxiliary/partial suffix. None is filtered or re-chunked for
-     * the replay observer; only an exact valid end opens replay. */
-    uint8_t mixed[320];
-    for (unsigned prefix = 0; prefix <= 10; prefix++)
-    for (unsigned suffix = 1; suffix <= 10; suffix++) {
-        reset(); replay_action = 1; replay_bits = 1;
-        memset(mixed, 0x66, sizeof(mixed));
-        if (prefix >= 4) memcpy(mixed, "AT\r\n", 4);
-        memcpy(mixed + prefix, live, 300);
-        if (suffix >= 5) memcpy(mixed + prefix + 300, "\xAA\x55\x90\xEB\xC8", 5);
-        unsigned n = prefix + 300 + suffix;
-        ble_periph_forward_notify(1, 0, mixed, n);
-        ble_periph_replay_tick();
-        assert(!s_live[1].replay_safe && replay_bits == 1 && received_len == n);
-        assert(!memcmp(received, mixed, n));
-        ble_periph_forward_notify(1, 0, live, 300);
-        ble_periph_replay_tick();
-        assert(replay_bits == 0 && received_len == n + 600);
-        assert(!memcmp(received + n, live, 300)); cases++;
-    }
-    /* Silence, malformed checksum and incomplete AT/JK prefixes cannot
-     * manufacture a safe end. A later valid record recovers the observer. */
-    reset(); replay_action = 1; replay_bits = 1;
-    memcpy(mixed, live, 300); mixed[299]++;
-    ble_periph_forward_notify(1, 0, mixed, 300);
-    for (unsigned tick = 0; tick < 100; tick++) ble_periph_replay_tick();
-    assert(replay_bits == 1 && received_len == 300);
-    ble_periph_forward_notify(1, 0, live, 300); ble_periph_replay_tick();
-    assert(replay_bits == 0 && received_len == 900);
-
-    /* Failed submission cannot certify a boundary, including failed first
-     * startup frame. Once a whole subsequent record succeeds, replay can run. */
-    for (unsigned startup = 0; startup < 2; startup++)
-    for (unsigned fail = 0; fail < 3; fail++)
-    for (unsigned oom = 0; oom < 2; oom++) {
-        reset(); s_live[1].aligned = !startup;
-        if (oom) alloc_fail = fail; else notify_fail = fail;
-        replay_action = 1; replay_bits = 1;
-        ble_periph_forward_notify(1, 0, live, 300);
-        ble_periph_replay_tick();
-        assert(!s_live[1].replay_safe && replay_bits == 1 && !replay_gets);
-        received_len = 0; notify_fail = alloc_fail = -1;
-        ble_periph_forward_notify(1, 0, live, 300); ble_periph_replay_tick();
-        assert(received_len == 600 && replay_bits == 0); cases++;
-    }
-    /* Reused handle/new CCCD epoch must discard an old closed boundary;
-     * replay before any new live submission is still allowed at startup. */
-    reset(); replay_action = 1; replay_bits = 1;
-    ble_periph_forward_notify(1, 0, live, 100);
-    identity.notify_epoch += 2;
-    ble_periph_replay_tick();
-    assert(replay_bits == 0 && received_len == 400);
-    assert(!s_live[1].aligned && !s_live[1].start.len && s_live[1].replay_safe);
-    reset(); s_live[1].aligned = false; replay_action = 1; replay_bits = 1;
-    ble_periph_forward_notify(1, 0, live, 100); ble_periph_replay_tick();
-    assert(received_len == 300 && replay_bits == 0 && !s_live[1].aligned);
-    ble_periph_forward_notify(1, 0, live + 100, 200);
-    assert(received_len == 600 && !memcmp(received + 300, live, 300));
-    /* One chunk can finish a previous record AND carry a whole next record.
-     * Partial magic after a valid end must carry over without opening replay. */
-    uint8_t double_live[600];
-    memcpy(double_live, live, 300); memcpy(double_live + 300, live, 300);
-    for (unsigned split = 280; split < 300; split++) {
-        reset(); replay_action = 1; replay_bits = 1;
-        ble_periph_forward_notify(1, 0, double_live, split);
-        ble_periph_replay_tick(); assert(replay_bits == 1);
-        ble_periph_forward_notify(1, 0, double_live + split, 600 - split);
-        ble_periph_replay_tick();
-        assert(received_len == 900 && !memcmp(received, double_live, 600)); cases++;
-    }
-    for (unsigned prefix = 1; prefix <= 5; prefix++) {
-        reset(); replay_action = 1; replay_bits = 1;
-        ble_periph_forward_notify(1, 0, double_live, 300 + prefix);
-        ble_periph_replay_tick(); assert(replay_bits == 1);
-        ble_periph_forward_notify(1, 0, double_live + 300 + prefix, 300 - prefix);
-        ble_periph_replay_tick();
-        assert(received_len == 900 && !memcmp(received, double_live, 600)); cases++;
-    }
-    puts("PASS: all replay debts/MTUs/splits, auxiliary suffixes, errors and epoch boundary resets");
     uint8_t data[320] = {0x55, 0xAA, 0xEB, 0x90, 0x03};
     for (unsigned i = 5; i < sizeof(data); i++) data[i] = (uint8_t)i;
     for (unsigned m = 0; m < sizeof(mtus)/sizeof(mtus[0]); m++)

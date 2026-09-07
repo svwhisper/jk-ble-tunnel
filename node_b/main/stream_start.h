@@ -1,4 +1,4 @@
-/* JK02 boundary search: startup gate and passive established-stream observer.
+/* Startup-only JK02 boundary search. Not a filter for an established stream.
  * Single tunnel-task owner; no allocation, clocks, BLE calls or shared state. */
 #ifndef STREAM_START_H
 #define STREAM_START_H

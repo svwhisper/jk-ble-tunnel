@@ -36,20 +36,8 @@ static bool notify_session(uint8_t id, const uint8_t *data, uint16_t len,
 static struct {
     uint64_t epoch;
     bool aligned;
-    bool replay_safe; /* no live bytes yet, or last byte ended a valid record */
     stream_start_t start;
 } s_live[CFG_NUM_UNITS];
-
-static void live_session(uint8_t id, nb_notify_session_t *session)
-{
-    nb_get_notify_session(id, session);
-    if (s_live[id].epoch != session->epoch) {
-        s_live[id].epoch = session->epoch;
-        s_live[id].aligned = false;
-        s_live[id].replay_safe = true; /* no bytes submitted in this session */
-        s_live[id].start.len = 0;
-    }
-}
 
 /* Compare only the documented public model/hardware/software bytes6..37.
  * Never fingerprint the remainder: it can contain passwords and passcodes.
@@ -297,19 +285,13 @@ void ble_periph_replay_tick(void)
          * (clean pipe); link up -> give the live unit 2 s to answer the
          * opener in-stream, cancel the debt if it does, deliver anyway if
          * it stays deaf (mortal modules can stream while their inbound is
-         * dead — 14:09 proof). A tick can fall INSIDE a live record: the
-         * independent boundary guard below must permit replay as well. */
+         * dead — 14:09 proof). Delivery is tick-serialized with the live
+         * relay; worst case one live frame resyncs at its next header. */
         int act = nb_replay_action(id);
         if (act != 1) {
             if (act == 2) ESP_LOGI(TAG, "diag id=%u replay cancelled: dev_seen advanced", id);
             continue;
         }
-        nb_notify_session_t session;
-        live_session(id, &session);
-        /* Preserve the debt and its original expiry while the stream is at
-         * an uncertain boundary. No timeout override, silence heuristic,
-         * extra buffering, or splitting/reformatting of live notifications. */
-        if (!s_live[id].replay_safe) continue;
         uint8_t bits = nb_take_replay(id);
         ESP_LOGI(TAG, "id %u replay deliver bits=0x%02X", id, bits);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
@@ -412,7 +394,12 @@ void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uin
     (void)idx; /* Replica has one notifying characteristic, as before. */
     if (id >= CFG_NUM_UNITS) return;
     nb_notify_session_t session;
-    live_session(id, &session);
+    nb_get_notify_session(id, &session);
+    if (s_live[id].epoch != session.epoch) {
+        s_live[id].epoch = session.epoch;
+        s_live[id].aligned = false;
+        s_live[id].start.len = 0;
+    }
     if (!session.connected || !session.notify_enabled) return;
     if (!s_live[id].aligned) {
         uint16_t consumed;
@@ -420,7 +407,6 @@ void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uin
         bool sent = notify_session(id, s_live[id].start.data,
                                    STREAM_START_RECORD_LEN, false, &session);
         s_live[id].start.len = 0;
-        s_live[id].replay_safe = sent;
         if (!sent) return; /* Never open the gate on a partial submission. */
         s_live[id].aligned = true;
         ESP_LOGI(TAG, "stream start id=%u aligned", id);
@@ -429,27 +415,7 @@ void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uin
     }
     /* Preserve AT/C8/unknown auxiliary bytes after this first boundary.
      * Cached replay must NOT align the independent incoming live stream. */
-    if (len) {
-        /* Observe every raw byte without changing its delivery. Reuse the
-         * startup scanner to recognize checksum-valid boundaries, including
-         * headers inside concatenated AT/other prefixes. A suffix after a
-         * record (even one byte) closes replay until another valid end. */
-        const uint8_t *p = data;
-        uint16_t remaining = len;
-        s_live[id].replay_safe = false;
-        while (remaining) {
-            uint16_t consumed;
-            if (!stream_start_push(&s_live[id].start, p, remaining, &consumed)) break;
-            s_live[id].start.len = 0;
-            remaining -= consumed;
-            p += consumed;
-            s_live[id].replay_safe = remaining == 0;
-        }
-        if (!notify_session(id, data, len, false, &session)) {
-            s_live[id].replay_safe = false;
-            s_live[id].start.len = 0; /* input was not fully submitted */
-        }
-    }
+    if (len) notify_session(id, data, len, false, &session);
 }
 
 /* Same chunking, bytes, mbuf ownership and error continuation as before,
