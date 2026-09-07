@@ -64,6 +64,33 @@ fault injection. Other transaction timeouts and bank2 radio0x208 at49615ms
 remain; do not claim the radio or cached-only phone problem solved. B10a
 unchanged/no USB reset, conns0/tunnel1. Phone switching/live-value test pending.
 
+17:40 owner reports normal bank switching all good, then deliberately switching
+before the first screen appeared produced "request device information failure"
+on TUN1. **Normal-switch test PASS; early-switch reliability remains FAIL/open**,
+not full application acceptance. Keep5c1 in place: its targeted retry path
+worked and no internal retry/orphan recurred, but do not attribute the remaining
+failure solely to switching or declare it unrelated to every firmware detail.
+
+Final TUN1 session B33687907..33694983ms lasted7.076s; CCCD33688651,0x97
+33688861/linkUP. Replay07 at33690952 (2.091s after opener), devinfo/settings/
+cell300B each,900B/nine submissions rc0, valid pre-stamp headers/checksums,
+no allocation failure. No live startup alignment/live devinfo or phone0x96
+in that session. Earlier brief TUN1 and TUN2 visits ended62/212ms after their
+openers, before reply grace. Exact timing of phone error display is not logged.
+A bank1 radio0x208 at160512ms (receipt17:38:45.301) preceded phone departure
+(receipt17:38:45.468); no idle teardown/internal retry/orphan caused that
+radio-loss event. A's earlier valid-frame/MQTT evidence is not proof the phone
+received a complete live record. Cached-only initialization again did not
+carry the app through this session, consistent with earlier pre5c1 failures;
+host-submission success does not establish delivery or app acceptance.
+
+Do not rollback the independently verified retry-owner change or reintroduce
+held B10b on this evidence alone. Next bounded investigation: session cleanup
+and queued opener/replay ownership across rapid disconnect/reconnect, plus
+cached-only handshake fidelity; reproduce locally before another firmware
+change. A radio0x208 remains separate. Current A5c1/B10a stay unchanged,
+all backouts preserved, phone retries paused; no new implementation/OTA.
+
 ## B notification diagnostics — owner authorized 2026-09-06 10:12
 
 ### Stage 10b — isolated B replay boundary gate, 2026-09-07
