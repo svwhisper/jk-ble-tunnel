@@ -27,8 +27,6 @@
 
 static const char *TAG = "ble_periph";
 static uint16_t s_val_handle;     /* 0xFFE1 value handle (idx 0) */
-static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
-                           uint16_t len, bool replay);
 static bool notify_session(uint8_t id, const uint8_t *data, uint16_t len,
                            bool replay, const nb_notify_session_t *session);
 /* Only the tunnel task owns these buffers. GAP callbacks change the epoch
@@ -102,11 +100,13 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
     const uint8_t *recs = buf[4]==0x97 ? recs97
                         : buf[4]==0x96 ? recs96 : NULL;
     if (!recs) return;
-    /* This callback runs on nimble_host; replay DELIVERY happens only on
-     * the tunnel task's tick, which also forwards the live TUN_RAW stream —
-     * one task, total ordering, mid-frame interleave structurally
-     * impossible (the 2026-08-30 "device is not supported" class). The tick
-     * fires within 100 ms and injects at a frame boundary. */
+    /* This callback only marks debt; delivery belongs to the tunnel task.
+     * Serialization alone does NOT prevent mid-record interleaving (held10b).
+     * Build one debt mask, then commit it only if this session still exists. */
+    nb_notify_session_t session;
+    nb_get_notify_session(id, &session);
+    if (!session.connected) return;
+    uint8_t bits = 0;
     ESP_LOGI(TAG, "id %d opener 0x%02X owed link=%d", id, buf[4],
              nb_link_state((uint8_t)id));
     for (int i = 0; recs[i]; i++) {
@@ -114,11 +114,10 @@ static void maybe_replay_opener(int id, const uint8_t *buf, uint16_t len)
         if (recs[i] == 0x03) nb_get_warm_dev((uint8_t)id, 0, &w);
         else                 nb_get_warm((uint8_t)id, recs[i], &w);
         if (!w.len) continue;
-        nb_mark_replay((uint8_t)id,
-                       recs[i] == 0x03 ? NB_REPLAY_DEVINFO
-                     : recs[i] == 0x01 ? NB_REPLAY_SETTINGS
-                                       : NB_REPLAY_CELLINFO);
+        bits |= recs[i] == 0x03 ? NB_REPLAY_DEVINFO
+              : recs[i] == 0x01 ? NB_REPLAY_SETTINGS : NB_REPLAY_CELLINFO;
     }
+    nb_mark_replay(id, bits, session.epoch);
 }
 
 static int chr_access(uint16_t conn, uint16_t attr,
@@ -287,12 +286,13 @@ void ble_periph_replay_tick(void)
          * it stays deaf (mortal modules can stream while their inbound is
          * dead — 14:09 proof). Delivery is tick-serialized with the live
          * relay; worst case one live frame resyncs at its next header. */
-        int act = nb_replay_action(id);
+        nb_notify_session_t session;
+        uint8_t bits;
+        int act = nb_claim_replay(id, &session, &bits);
         if (act != 1) {
             if (act == 2) ESP_LOGI(TAG, "diag id=%u replay cancelled: dev_seen advanced", id);
             continue;
         }
-        uint8_t bits = nb_take_replay(id);
         ESP_LOGI(TAG, "id %u replay deliver bits=0x%02X", id, bits);
         for (unsigned r = 0; r < sizeof(seq)/sizeof(seq[0]); r++) {
             if (!(bits & seq[r].bit)) continue;
@@ -322,7 +322,10 @@ void ble_periph_replay_tick(void)
                 for (uint16_t k = 0; k < w.len - 1; k++) sum += w.data[k];
                 w.data[w.len - 1] = sum;
             }
-            forward_notify(id, 0, w.data, w.len, true);
+            /* One destination for the WHOLE claimed burst. If the phone
+             * reconnects or toggles CCCD, notify_session rejects remaining
+             * old chunks/records; it must not adopt the replacement session. */
+            notify_session(id, w.data, w.len, true, &session);
             ESP_LOGI(TAG, "diag id=%u cache rec=%u len=%u hdr=%d sum=%d ctr=%u->%u",
                      id, seq[r].rec, w.len, header_ok, checksum_ok, old_ctr,
                      w.len >= 6 ? w.data[5] : 0);
@@ -422,15 +425,6 @@ void ble_periph_forward_notify(uint8_t id, uint8_t idx, const uint8_t *data, uin
  * but abort remaining chunks when the session changes. Single tunnel-task caller;
  * live error logs capped at one per second, routine cell traffic not logged.
  * rc=0 is host submission, NOT over-air delivery or phone acceptance. */
-static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
-                           uint16_t len, bool replay)
-{
-    (void)idx;
-    nb_notify_session_t session;
-    nb_get_notify_session(id, &session);
-    notify_session(id, data, len, replay, &session);
-}
-
 static bool notify_session(uint8_t id, const uint8_t *data, uint16_t len,
                            bool replay, const nb_notify_session_t *session)
 {

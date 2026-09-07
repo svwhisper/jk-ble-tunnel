@@ -5,6 +5,43 @@ Baseline: `2f34ad805bc31c81da2bafd045f9da89c8cc4dc3`; working branch
 changes from another stage. Each stage gets a commit, saved binaries, tests,
 and an explicit acceptance decision before the next live deployment.
 
+## B replay session ownership — isolated Stage 10c, 2026-09-07
+
+Owner authorized proceeding after the early-switch failure. Local reproduction
+found an independent session bug: a reconnect during the first cached record
+aborted that record, but fresh snapshots for the next two records sent600 old
+bytes into the replacement connection. This is not proof that this precise race
+caused the latest phone error; radio loss and cached-only initialization remain
+open. Red-team choice: repair ownership without changing cached content, replay
+timing/order, transport queues, radio policy or protocol. Do not adopt held10b's
+mid-record-boundary observer in this stage. Its complete history is preserved
+on `hold/b10b-source-20260907`; commit7df2163 first restored the active B files
+to10a, keeping A5c1 unchanged.
+
+Replay eligibility, debt removal and destination snapshot now happen under one
+existing state mutex. All records/chunks in that claim use that same epoch and
+connection; a reconnect/CCCD change stops remaining old submissions without
+consuming new-session debt. Opener cache checks create a single debt mask,
+committed only against the captured session epoch. Writes before CCCD remain
+supported. No mutex spans NimBLE calls, no notification retries or larger
+buffers, and already-authorized host submissions cannot be recalled. Existing
+2s UP grace/5s expiry, cache bytes/counter stamping, NVS, A application and
+boot/idle/nightly policies are unchanged. Outgoing command queue ownership and
+mid-record replay interleaving remain separate work, not silently bundled.
+
+Full native suite passes, including ASAN/UBSAN/TSan,39,078 B notification cases,
+every replay chunk boundary over six MTUs, cache-read session changes,
+960 original-policy equivalence cases,10,000 concurrent session/claim cycles,
+12,880 cache-selection cases and16 updater tests. Original cache-selection
+defects remain reproduced, not repaired. Logs `/private/tmp/jk-stage10c-host-tests.log`
+and `/private/tmp/jk-stage10c-build.log`; test binaries `/private/tmp/jk-host-tests.BJico2`.
+B build passed:1,114,368B (45% partition headroom), ELF
+`e60ff867328f0ea58eb1bd9272efa92498597e05d0ace026e3ac35f03f01403c`, SHA256
+`5cf52028d84e151b65cddcf3c92e70035263781d4729180d4eed80dbc8872a78`.
+17:56 preflight: exact A5c1/B10a both OTA VALID; all four MQTT app flags false.
+Immediate backout is the hash-verified saved B10a image; earlier accepted pair
+also retained. B-only OTA and read-only phone acceptance pending.
+
 ## A reconnect ownership — isolated Stage 5c1, 2026-09-07
 
 Owner authorized proceeding after the restored10a comparison. Red-team choice:

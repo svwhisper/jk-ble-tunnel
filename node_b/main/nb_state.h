@@ -110,8 +110,7 @@ void nb_get_warm(uint8_t bms_id, uint8_t rec, nb_cache_t *out);
 void nb_get_warm_dev(uint8_t bms_id, int page, nb_cache_t *out);
 
 /* Deferred replay owed to a connected app whose CCCD was off at write time. */
-void    nb_mark_replay(uint8_t bms_id, uint8_t bits);
-uint8_t nb_take_replay(uint8_t bms_id);   /* returns and clears the bits */
+void nb_mark_replay(uint8_t bms_id, uint8_t bits, uint64_t epoch);
 
 /* Narrow flag reads. nb_identity_t is ~3.3 KB (ten embedded caches) — a
  * whole-struct copy in a NimBLE callback blew the nimble_host stack
@@ -143,6 +142,10 @@ tunnel_link_state_t nb_link_state(uint8_t bms_id);
  * no devinfo seen — a mortal module's inbound side can be deaf while its
  * stream still flows (proved 14:09: 9 s of live cells, 97 unanswered). */
 int nb_replay_action(uint8_t bms_id);
+/* Decision, debt removal and destination snapshot are one locked operation.
+ * act1 returns claimed bits/session; act0/2 return zero bits. Deliver the
+ * whole burst against this snapshot, never a fresh per-record connection. */
+int nb_claim_replay(uint8_t bms_id, nb_notify_session_t *session, uint8_t *bits);
 void nb_note_dev_forwarded(uint8_t bms_id, uint64_t epoch);
 
 /* connection bookkeeping */

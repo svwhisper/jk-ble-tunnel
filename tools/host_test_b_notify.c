@@ -22,6 +22,16 @@ static void test_log(const char *tag, const char *fmt, ...)
 #define ESP_LOGW test_log
 #include "../node_b/main/ble_periph.c"
 
+/* Exercise the production sender independently of replay policy. */
+static void forward_notify(uint8_t id, uint8_t idx, const uint8_t *data,
+                           uint16_t len, bool replay)
+{
+    (void)idx;
+    nb_notify_session_t session;
+    nb_get_notify_session(id, &session);
+    notify_session(id, data, len, replay, &session);
+}
+
 static nb_identity_t identity;
 static uint16_t test_mtu;
 static int alloc_fail, notify_fail;
@@ -35,6 +45,8 @@ static uint8_t replay_bits;
 static uint8_t replay_order[3];
 static unsigned replay_gets;
 static int change_session_after_call = -1;
+static int change_session_on_cache = -1;
+static bool new_debt_on_change;
 
 int64_t esp_timer_get_time(void) { return now_us; }
 void nb_get_identity(uint8_t id, nb_identity_t *out)
@@ -62,17 +74,33 @@ int ble_gatts_notify_custom(uint16_t h, uint16_t attr, struct os_mbuf *om)
     assert(received_len + om->len <= sizeof(received));
     memcpy(received + received_len, pending_data, om->len);
     received_len += om->len;
-    if ((int)calls == change_session_after_call) identity.notify_epoch += 2;
+    if ((int)calls == change_session_after_call) {
+        identity.notify_epoch += 2;
+        if (new_debt_on_change) replay_bits = NB_REPLAY_CELLINFO;
+    }
     return (int)calls++ == notify_fail ? 6 : 0;
 }
-int nb_replay_action(uint8_t id) { return id == 1 ? replay_action : 0; }
-uint8_t nb_take_replay(uint8_t id)
-{ assert(id == 1); uint8_t bits = replay_bits; replay_bits = 0; return bits; }
+int nb_claim_replay(uint8_t id, nb_notify_session_t *session, uint8_t *bits)
+{
+    *bits = 0;
+    if (id != 1) return 0;
+    if (replay_action == 1) {
+        nb_get_notify_session(id, session);
+        *bits = replay_bits; replay_bits = 0;
+    }
+    return replay_action;
+}
 void nb_get_warm(uint8_t id, uint8_t rec, nb_cache_t *out)
 {
     assert(id == 1 && rec >= 1 && rec <= 3 && replay_gets < 3);
+    if ((int)replay_gets == change_session_on_cache) {
+        identity.notify_epoch += 2; replay_bits = NB_REPLAY_CELLINFO;
+    }
     replay_order[replay_gets++] = rec; *out = warm[rec];
 }
+void nb_mark_replay(uint8_t id, uint8_t bits, uint64_t epoch)
+{ assert(id == 1); if (identity.connected && epoch == identity.notify_epoch) replay_bits |= bits; }
+tunnel_link_state_t nb_link_state(uint8_t id) { assert(id == 1); return LINK_UP; }
 void nb_get_warm_dev(uint8_t id, int page, nb_cache_t *out)
 { assert(page == 0); nb_get_warm(id, 3, out); }
 
@@ -85,6 +113,7 @@ static void reset(void)
     memset(s_live, 0, sizeof(s_live));
     s_live[1].epoch = 1; s_live[1].aligned = true;
     change_session_after_call = -1;
+    change_session_on_cache = -1; new_debt_on_change = false;
     test_mtu = 185; alloc_fail = notify_fail = -1;
     allocs = calls = notes = received_len = log_count = replay_gets = 0;
     last_log[0] = 0;
@@ -92,7 +121,51 @@ static void reset(void)
 
 int main(void)
 {
+    /* Old sender submitted600 remaining cached bytes to a replacement
+     * connection. A claimed burst must remain pinned to the old epoch. */
+    reset(); replay_action = 1; replay_bits = 7; change_session_after_call = 0;
+    for (unsigned rec = 1; rec <= 3; rec++) {
+        warm[rec].len = 300; memset(warm[rec].data, 0, 300);
+        memcpy(warm[rec].data, "\x55\xAA\xEB\x90", 4); warm[rec].data[4] = rec;
+    }
+    ble_periph_replay_tick();
+    assert(calls == 1 && received_len == 128);
+    puts("PASS: remaining replay records cannot cross into a replacement phone session");
     static const uint16_t mtus[] = {0, 23, 64, 131, 185, 512};
+    for (unsigned m = 0; m < sizeof(mtus)/sizeof(mtus[0]); m++) {
+        unsigned chunk = (mtus[m] < 23 ? 23 : mtus[m]) - 3;
+        if (chunk > 128) chunk = 128;
+        unsigned per_frame = (300 + chunk - 1) / chunk;
+        for (unsigned edge = 0; edge < 3 * per_frame; edge++) {
+            reset(); test_mtu = mtus[m]; replay_action = 1; replay_bits = 7;
+            change_session_after_call = edge; new_debt_on_change = true;
+            ble_periph_replay_tick();
+            unsigned tail = ((edge % per_frame) + 1) * chunk;
+            if (tail > 300) tail = 300;
+            assert(calls == edge + 1 && received_len == (edge / per_frame) * 300 + tail);
+            assert(replay_bits == NB_REPLAY_CELLINFO);
+            received_len = replay_gets = 0; change_session_after_call = -1;
+            ble_periph_replay_tick();
+            assert(received_len == 300 && replay_gets == 1 && replay_order[0] == 2);
+            assert(!replay_bits); cases++;
+        }
+    }
+    for (unsigned edge = 0; edge < 3; edge++) {
+        reset(); replay_action = 1; replay_bits = 7; change_session_on_cache = edge;
+        ble_periph_replay_tick();
+        assert(received_len == edge * 300 && replay_bits == NB_REPLAY_CELLINFO); cases++;
+    }
+    /* The actual opener marks all available records once, and a session
+     * change while cache snapshots are gathered prevents any old marking. */
+    uint8_t opener[] = {0xAA, 0x55, 0x90, 0xEB, 0x97};
+    reset(); replay_bits = 0;
+    maybe_replay_opener(1, opener, sizeof(opener)); assert(replay_bits == 7);
+    for (unsigned edge = 0; edge < 3; edge++) {
+        reset(); replay_bits = 0; change_session_on_cache = edge;
+        maybe_replay_opener(1, opener, sizeof(opener));
+        assert(replay_bits == NB_REPLAY_CELLINFO); cases++;
+    }
+    puts("PASS: all replay chunk boundaries/MTUs and cache-read edges retain new-session debt");
     uint8_t data[320] = {0x55, 0xAA, 0xEB, 0x90, 0x03};
     for (unsigned i = 5; i < sizeof(data); i++) data[i] = (uint8_t)i;
     for (unsigned m = 0; m < sizeof(mtus)/sizeof(mtus[0]); m++)

@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdatomic.h>
 #define HOST_ESP_LOG_H
 static void test_log(const char *, const char *, ...);
 #define ESP_LOGI test_log
@@ -36,6 +37,33 @@ static void frame(uint8_t *f)
     memcpy(f + 22, "19A", 3); memcpy(f + 30, "19.31", 5);
     memcpy(f + 46, "TEST UNIT", 9); memcpy(f + 86, "SYNTH000001", 11);
     checksum(f);
+}
+static atomic_bool claim_done;
+static unsigned claim_count;
+static void *session_writer(void *unused)
+{
+    (void)unused;
+    for (unsigned i = 0; i < 10000; i++) {
+        nb_set_conn(1, false, 0); nb_set_conn(1, true, 7);
+        nb_notify_session_t s; nb_get_notify_session(1, &s);
+        nb_mark_replay(1, 1, s.epoch); nb_set_notify(1, true);
+    }
+    atomic_store(&claim_done, true); return NULL;
+}
+static void *session_claimer(void *unused)
+{
+    (void)unused; uint64_t last = 0;
+    for (;;) {
+        bool done = atomic_load(&claim_done);
+        nb_notify_session_t s; uint8_t bits;
+        int act = nb_claim_replay(1, &s, &bits);
+        if (act == 1) {
+            assert(bits == 1 && s.connected && s.notify_enabled && s.conn_handle == 7);
+            assert(s.epoch > last); last = s.epoch; claim_count++;
+        } else assert(!bits);
+        if (done) break;
+    }
+    return NULL;
 }
 int main(void)
 {
@@ -71,7 +99,9 @@ int main(void)
     puts("PASS: B session epoch edges, duplicate callbacks, handle reuse and identity isolation");
     nb_state_init(); nb_set_conn(1, true, 7); nb_set_notify(1, true);
     nb_set_link(1, LINK_UP); test_now = 10000000;
-    nb_mark_replay(1, NB_REPLAY_DEVINFO);
+    nb_notify_session_t debt_session;
+    nb_get_notify_session(1, &debt_session);
+    nb_mark_replay(1, NB_REPLAY_DEVINFO, debt_session.epoch);
     for (unsigned second = 0; second <= 5; second++) {
         test_now = 10000000 + second * 1000000;
         assert(nb_replay_action(1) == (second > 2 ? 1 : 0));
@@ -80,6 +110,53 @@ int main(void)
     test_now++;
     assert(!nb_replay_action(1) && !s_id[1].pending_replay);
     puts("PASS: deferred replay retains original2s grace/5s expiry without renewing debt");
+    nb_state_init(); test_now = 10000000; nb_set_link(1, LINK_REACHABLE_IDLE);
+    nb_set_conn(1, true, 7); nb_get_notify_session(1, &debt_session);
+    nb_mark_replay(1, 7, debt_session.epoch);
+    nb_notify_session_t claimed; uint8_t bits;
+    assert(!nb_claim_replay(1, &claimed, &bits) && !bits && s_id[1].pending_replay == 7);
+    nb_set_notify(1, true);
+    assert(nb_claim_replay(1, &claimed, &bits) == 1 && bits == 7);
+    assert(claimed.connected && claimed.notify_enabled && !s_id[1].pending_replay);
+    nb_set_conn(1, false, 0); nb_set_conn(1, true, 7); nb_set_notify(1, true);
+    nb_get_notify_session(1, &debt_session);
+    nb_mark_replay(1, 2, debt_session.epoch);
+    nb_mark_replay(1, 7, claimed.epoch); /* late old opener cannot add debt */
+    assert(s_id[1].pending_replay == 2);
+    assert(nb_claim_replay(1, &claimed, &bits) == 1 && bits == 2);
+    assert(claimed.epoch == debt_session.epoch);
+    assert(!nb_claim_replay(CFG_NUM_UNITS, &claimed, &bits) && !bits && !claimed.connected);
+
+    /* Atomic claim must preserve every existing decision, expiry and
+     * cancellation rule; only successful delivery removes the claimed debt. */
+    unsigned claim_cases = 0;
+    const int64_t ages[] = {0,2000000,2000001,5000000,5000001};
+    for (unsigned c = 0; c < 2; c++) for (unsigned n = 0; n < 2; n++)
+    for (unsigned debt = 0; debt < 8; debt++) for (unsigned link = 0; link < 3; link++)
+    for (unsigned a = 0; a < 5; a++) for (unsigned seen = 0; seen < 2; seen++) {
+        memset(&s_id[1], 0, sizeof(s_id[1]));
+        s_id[1].connected = c; s_id[1].notify_enabled = n;
+        s_id[1].notify_epoch = 99; s_id[1].conn_handle = 7;
+        s_id[1].pending_replay = debt; s_id[1].link = link;
+        s_id[1].pending_since_us = 10000000; s_id[1].dev_seen_us = seen ? 10000001 : 0;
+        test_now = 10000000 + ages[a];
+        nb_identity_t before = s_id[1];
+        int expected = nb_replay_action(1);
+        nb_identity_t after = s_id[1]; s_id[1] = before;
+        assert(nb_claim_replay(1, &claimed, &bits) == expected);
+        if (expected == 1) {
+            assert(bits == debt && claimed.epoch == 99 && claimed.conn_handle == 7);
+            assert(claimed.connected && claimed.notify_enabled); after.pending_replay = 0;
+        } else assert(!bits);
+        assert(!memcmp(&s_id[1], &after, sizeof(after))); claim_cases++;
+    }
+    nb_state_init(); test_now = 10000000; nb_set_link(1, LINK_REACHABLE_IDLE);
+    pthread_t writer, claimer;
+    assert(!pthread_create(&writer, NULL, session_writer, NULL));
+    assert(!pthread_create(&claimer, NULL, session_claimer, NULL));
+    assert(!pthread_join(writer, NULL) && !pthread_join(claimer, NULL));
+    assert(claim_count);
+    printf("PASS: %u replay-policy equivalence cases and10000 concurrent session/claim cycles\n", claim_cases);
     nb_state_init(); frame(old); old[38] = old[39] = 255; old[40] = 1;
     checksum(old); nb_set_warm(1, 3, old, 300);
     memcpy(next, old, 300); memset(next + 38, 0, 4); next[40] = 2;

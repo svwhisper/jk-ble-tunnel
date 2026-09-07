@@ -161,20 +161,16 @@ void nb_get_warm_dev(uint8_t id, int page, nb_cache_t *out)
     lock(); *out = s_id[id].warm_dev[page]; unlock();
 }
 
-void nb_mark_replay(uint8_t id, uint8_t bits)
+void nb_mark_replay(uint8_t id, uint8_t bits, uint64_t epoch)
 {
     if (id >= CFG_NUM_UNITS) return;
     lock();
+    if (!s_id[id].connected || s_id[id].notify_epoch != epoch || !bits) {
+        unlock(); return;
+    }
     if (!s_id[id].pending_replay) s_id[id].pending_since_us = esp_timer_get_time();
     s_id[id].pending_replay |= bits;
     unlock();
-}
-
-uint8_t nb_take_replay(uint8_t id)
-{
-    if (id >= CFG_NUM_UNITS) return 0;
-    lock(); uint8_t b = s_id[id].pending_replay; s_id[id].pending_replay = 0; unlock();
-    return b;
 }
 
 bool nb_notify_ready(uint8_t id)
@@ -229,12 +225,9 @@ void nb_note_dev_forwarded(uint8_t id, uint64_t epoch)
     unlock();
 }
 
-int nb_replay_action(uint8_t id)
+static int replay_action_locked(uint8_t id, int64_t now)
 {
-    if (id >= CFG_NUM_UNITS) return 0;
     int act = 0;
-    int64_t now = esp_timer_get_time();
-    lock();
     if (s_id[id].connected && s_id[id].notify_enabled &&
         s_id[id].pending_replay) {
         if (now - s_id[id].pending_since_us > 5000000LL) {
@@ -245,6 +238,33 @@ int nb_replay_action(uint8_t id)
                    now - s_id[id].pending_since_us > 2000000LL) {
             act = 1;                                    /* deliver */
         }
+    }
+    return act;
+}
+
+int nb_replay_action(uint8_t id)
+{
+    if (id >= CFG_NUM_UNITS) return 0;
+    lock();
+    int act = replay_action_locked(id, esp_timer_get_time());
+    unlock();
+    return act;
+}
+
+int nb_claim_replay(uint8_t id, nb_notify_session_t *session, uint8_t *bits)
+{
+    memset(session, 0, sizeof(*session));
+    *bits = 0;
+    if (id >= CFG_NUM_UNITS) return 0;
+    lock();
+    int act = replay_action_locked(id, esp_timer_get_time());
+    if (act == 1) {
+        session->epoch = s_id[id].notify_epoch;
+        session->conn_handle = s_id[id].conn_handle;
+        session->connected = s_id[id].connected;
+        session->notify_enabled = s_id[id].notify_enabled;
+        *bits = s_id[id].pending_replay;
+        s_id[id].pending_replay = 0;
     }
     unlock();
     return act;
