@@ -2,6 +2,15 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-09-15 — isolated R4a candidate from live R1c
+
+This worktree is deliberately based on R1c5c91296, not the cumulative
+flow-control branch. Live pair last verified12 September: A R1c / B10c HOLD.
+Only three A production files change: classify radio contention separately,
+preserve explicit/implicit CONNECT demand, keep genuine failure backoff intact.
+No B, wire, quiet-idle, configuration or owned-mode changes. Later R1d/R2/R3
+stages are excluded. See docs/R4A_ISOLATED.md. Candidate is NOT deployed.
+
 ## 2026-09-07 overnight — LOCAL flow-control remediation, NO OTA
 
 Owner authorized unattended local work from 22:30 after the complete review.

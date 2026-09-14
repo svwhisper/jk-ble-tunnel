@@ -56,6 +56,7 @@ typedef struct {
 /* Result status carried on q_bms_response. */
 typedef enum {
     RESP_OK, RESP_TIMEOUT, RESP_LINK_DOWN, RESP_GATT_ERR, RESP_REJECTED,
+    RESP_CONNECT_WAIT, /* local radio occupied; CONNECT issued no radio work */
 } resp_status_t;
 
 /* q_bms_response item (ble_owner -> arbiter). The legacy frame fields are

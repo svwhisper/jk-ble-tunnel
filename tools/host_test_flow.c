@@ -114,6 +114,60 @@ static void complete(bms_request_t r, resp_status_t st)
     tick();
 }
 
+static void test_connect_waits(void)
+{
+    for (unsigned explicit=0; explicit<2; explicit++) {
+        reset(); state_set_link_state(1,LINK_REACHABLE_IDLE,false,0);
+        bms_request_t r={.bms_id=1,.kind=explicit?TXN_CONNECT:TXN_POLL,
+            .source=SRC_INTERNAL,.timeout_ms=9000,.payload_len=1,.payload={11}};
+        arbiter_submit(&r); tick(); bms_request_t active=take();
+        assert(active.kind==TXN_CONNECT && s_pend[1].count==1);
+        for (unsigned i=1; i<PEND_DEPTH; i++) submit(1,20+i);
+        assert(s_pend[1].count==PEND_DEPTH);
+        s_pend[1].backoff_ms=8000; s_pend[1].connect_after_us=test_now-1;
+        int64_t previous_backoff=s_pend[1].connect_after_us;
+        for (unsigned cycle=0; cycle<100; cycle++) {
+            complete(active,RESP_CONNECT_WAIT);
+            assert(!s_pend[1].busy && !requests.count && s_pend[1].count==PEND_DEPTH);
+            assert(s_pend[1].backoff_ms==8000 && s_pend[1].connect_after_us==previous_backoff);
+            assert(s_pend[1].dispatch_after_us==test_now+100000);
+            tick(); bms_request_t retry=take();
+            assert(retry.kind==TXN_CONNECT && retry.cmd_id>active.cmd_id);
+            assert(s_pend[1].ring[s_pend[1].head].payload[0]==11);
+            complete(active,RESP_CONNECT_WAIT); /* delayed old result cannot release retry */
+            assert(s_pend[1].busy && !requests.count && s_pend[1].count==PEND_DEPTH);
+            active=retry; tests++;
+        }
+        /* A genuine failure still escalates the existing remote history. */
+        complete(active,RESP_LINK_DOWN);
+        assert(s_pend[1].backoff_ms==16000 && s_pend[1].connect_after_us==test_now+16000000);
+        assert(s_pend[1].count==PEND_DEPTH-explicit && !requests.count);
+        tests++;
+    }
+    /* A retained explicit CONNECT releases only its own head, and never
+     * resurrects a connect deliberately removed by CLEAR. */
+    const resp_status_t ends[]={RESP_OK,RESP_LINK_DOWN,RESP_CONNECT_WAIT};
+    for (unsigned i=0; i<3; i++) {
+        reset();
+        bms_request_t c={.bms_id=1,.kind=TXN_CONNECT,.source=SRC_INTERNAL,.timeout_ms=9000};
+        arbiter_submit(&c); tick(); bms_request_t active=take();
+        assert(s_pend[1].count==1);
+        arbiter_clear_pending(1); tick(); assert(s_pend[1].count==0);
+        submit(1,88); assert(s_pend[1].count==1);
+        complete(active,ends[i]);
+        if (ends[i]!=RESP_OK) tick();
+        bms_request_t kept=take(); assert(kept.kind==TXN_POLL && kept.payload[0]==88);
+        complete(kept,RESP_OK); assert(!s_pend[1].busy && !s_pend[1].count);
+        tests++;
+    }
+    reset();
+    bms_request_t c={.bms_id=1,.kind=TXN_CONNECT,.source=SRC_APP,.timeout_ms=9000};
+    arbiter_submit(&c); tick(); bms_request_t active=take(); submit(1,77);
+    complete(active,RESP_OK); bms_request_t next=take();
+    assert(next.kind==TXN_POLL && next.payload[0]==77 && !s_pend[1].count);
+    complete(next,RESP_OK); tests++;
+}
+
 int main(void)
 {
     state_cache_init();
@@ -152,7 +206,7 @@ int main(void)
 
     /* Delayed duplicate of the previous operation must not release this one,
      * change retry policy, or dispatch another request. */
-    for (unsigned status=RESP_OK; status<=RESP_REJECTED; status++) {
+    for (unsigned status=RESP_OK; status<=RESP_CONNECT_WAIT; status++) {
         reset(); submit(1, 1); bms_request_t old = take();
         complete(old, RESP_OK);
         submit(1, 2); bms_request_t active = take();
@@ -231,6 +285,7 @@ int main(void)
         assert(!requests.count && !s_pend[1].busy && !s_pend[1].count);
     }
 #endif
+    test_connect_waits();
     printf("PASS: %u deterministic production arbiter/queue/clock scenarios", tests);
 #ifdef FLOW_LEGACY_CORRELATION
     printf(" (stale-completion defect expected)");

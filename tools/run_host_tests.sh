@@ -76,3 +76,4 @@ cc -fsanitize=thread -g -Wall -Wextra -pthread -I tools/host_stubs \
 echo "Test executables preserved at $test_dir"
 bash tools/run_flow_tests.sh
 bash tools/run_transaction_tests.sh
+bash tools/run_radio_wait_tests.sh

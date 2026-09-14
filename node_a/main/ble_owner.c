@@ -865,15 +865,22 @@ static void start_connect(link_t *l)
 {
     const char *name = name_for(l->bms_id);
     const uint8_t *addr = addr_for(l->bms_id);
-    if (!name || !addr || !s_ble_enabled || s_connecting || s_conn_inflight ||
-        s_scan_active || net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
-        /* No target, another scan/connect in flight, a diagnostic scan owns
-         * the radio, or WiFi is re-associating (shared radio — scanning now
-         * would starve the 802.11 handshake). Fail the txn; the arbiter
-         * retries. */
+    if (!name || !addr || !s_ble_enabled || net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
+        /* Preserve target/BLE-off/WiFi-quiesce behavior in this isolated stage.
+         * These gates have not established that a remote scan failed either;
+         * their demand policy is a separate integration boundary. */
         l->txn_active = false;
         respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         l->in_use = false;
+        return;
+    }
+    if (s_connecting || s_conn_inflight || s_scan_active) {
+        /* No scan/connect was issued for this request. Waiting for our own
+         * radio is not evidence the remote BMS failed. Do not free another
+         * owner's slot or feed the remote-failure exponential backoff. */
+        l->txn_active=false;
+        respond(l->bms_id,l->txn.cmd_id,RESP_CONNECT_WAIT,NULL,0,JK_REC_NONE);
+        l->in_use=false;
         return;
     }
     ESP_LOGI(TAG, "scanning for bms %u ('%s')", l->bms_id, name);

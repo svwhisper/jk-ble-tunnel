@@ -60,6 +60,7 @@ typedef struct {
     bms_request_t ring[PEND_DEPTH];
     uint8_t head, tail, count;
     bool     busy;              /* a transaction is outstanding on the link  */
+    bool active_connect_head; /* explicit CONNECT retained until non-WAIT result */
     bms_cmd_id_t next_cmd_id;
     bms_cmd_id_t active_cmd_id; /* valid only while busy; never a link event */
     int64_t  link_wait_deadline_us; /* app-write link-up guard (0 = inactive) */
@@ -141,6 +142,7 @@ static void dispatch(uint8_t id)
                              * sweep kills connects that are still scanning */
                             .timeout_ms = 9000, .cmd_id = p->next_cmd_id + 1 };
         if (xQueueSend(g_q_bms_request, &c, pdMS_TO_TICKS(20)) == pdTRUE) {
+            p->active_connect_head=false;
             p->next_cmd_id = p->active_cmd_id = c.cmd_id;
             p->busy = true;   /* retry next tick if the link queue was full */
         }
@@ -152,9 +154,11 @@ static void dispatch(uint8_t id)
     bms_request_t out = *r;
     out.cmd_id = p->next_cmd_id + 1;
     if (xQueueSend(g_q_bms_request, &out, pdMS_TO_TICKS(20)) == pdTRUE) {
+        p->active_connect_head=out.kind==TXN_CONNECT;
         p->next_cmd_id = p->active_cmd_id = out.cmd_id;
         p->busy = true;
-        ring_pop(p, &out);
+        if (p->active_connect_head) r->cmd_id=out.cmd_id;
+        else ring_pop(p, &out);
     } else {
         ESP_LOGW(TAG, "bms %u req queue full, pending head retained", id);
     }
@@ -336,10 +340,25 @@ static void on_response(const bms_response_t *rsp)
     /* A result is not a generic link-state observation. Late/duplicate or
      * unsolicited results cannot release another operation or alter backoff. */
     if (!p->busy || rsp->cmd_id != p->active_cmd_id) return;
+    /* An explicit CONNECT must survive local radio contention even with a
+     * full pending ring. Retain it in-place, not pop/reappend or allocate a
+     * retry slot. CLEAR may have removed it: never pop a replacement head. */
+    if (p->active_connect_head && rsp->status!=RESP_CONNECT_WAIT && p->count &&
+        p->ring[p->head].cmd_id==rsp->cmd_id) {
+        bms_request_t completed;
+        ring_pop(p,&completed);
+    }
+    p->active_connect_head=false;
     p->busy = false;
     p->active_cmd_id = 0;
 
     switch (rsp->status) {
+        case RESP_CONNECT_WAIT:
+            /* Same short anti-spin gate as other dispatch failures; do not
+             * increment/reset genuine failure history or extend connect_after.
+             * The pending head retries on a later ordinary task tick/event. */
+            p->dispatch_after_us=esp_timer_get_time()+100000;
+            break;
         case RESP_OK:
             p->backoff_ms = 0;              /* healthy again: reset backoff */
             /* Connection just came up? flush pending. Decode handled elsewhere. */
