@@ -2,6 +2,25 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-09-26 — READ FIRST: what actually decides app success (Claude)
+
+Resumed from Codex. Analysis of all 33 captured phone sessions (7–26 Sep):
+Status appears only when the bank's LIVE device-info reply reaches the phone
+within ~6.5 s of attach; the app gives up at 6.6–7.2 s. B's cached burst was on
+time in all 10 failures and never rescued one, so the B replay work (B10x, R5x)
+is shelved; B stays on 10c. 8/10 failures were cold attaches where A had no
+usable link in time, mostly A's 30%-duty discovery scan (7/37 scans missed 5 s;
+bank 3 missed 5/10). 2/10 were warm links whose module ignored the app's 0x97.
+Evidence and tool: ~/Downloads/jk-ble-tunnel-local/20260926-cold-warm/
+(ANALYSIS.md, sessions.py, sessions.txt, capture.py).
+
+Stage D1 (connect directly to the public address, no scan) is built and frozen
+at ~/Downloads/jk-ble-tunnel-rollback/20260926-d1-direct-connect/ from branch
+stage-d1-direct-connect-20260926 (1a576ab). NOT deployed; needs an attended OTA
+plus the cold/warm test (see its MANIFEST.md). Isolated B R5a1 is committed at
+ff8294f (stage-r5a1-b10c-20260915) but shelved. Change log is
+~/.claude/CHANGELOG.md again; ~/.codex/CHANGELOG.md is frozen history.
+
 ## 2026-09-15 — isolated R4a candidate from live R1c
 
 This worktree is deliberately based on R1c5c91296, not the cumulative
