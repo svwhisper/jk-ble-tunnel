@@ -35,6 +35,18 @@ static const cfg_bms_target_t CFG_BMS[CFG_NUM_UNITS] = { FLEET_BMS_TABLE };
  * re-raises it until demanded (app attach, MQTT write, boot verify). */
 #define CFG_IDLE_DISCONNECT_MS   60000
 #define CFG_APP_LINK_TIMEOUT_MS  10000   /* app-write wait for link-up before fail */
+/* Stage D2 (2026-09-26). The phone app abandons an attach ~6.5 s after it
+ * connects unless the bank's live device-info reply has reached it, so both
+ * recoveries below spend at most a few seconds of that budget:
+ * FAST_RETRY: the FIRST failed connect while a phone waits (typically 0x23E
+ *   / discovery rc=7 right after connecting) retries after this, not after
+ *   the 2 s backoff; later failures back off as before.
+ * DEVINFO_WAIT: on a link that was already held, the app's 0x97 must be
+ *   answered with a device-info record within this, else the link is
+ *   refreshed once per app session (captured healthy replies: 0.1-1.2 s,
+ *   one 2.1 s; a fresh link answered within ~1-2 s). */
+#define CFG_APP_FAST_RETRY_MS    250
+#define CFG_APP_DEVINFO_WAIT_MS  1500
 #define CFG_REACHABILITY_PROBE_S 60      /* supervisor probe floor for unreachable */
 #define CFG_RECONNECT_CAP_MS     30000   /* exponential backoff cap               */
 /* Gentle-client reconnect pacing (2026-08-29 CPUAux reframe): a session that

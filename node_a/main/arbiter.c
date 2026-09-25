@@ -23,7 +23,8 @@
 static const char *TAG = "arbiter";
 
 /* ---- inbound message union --------------------------------------------- */
-typedef enum { ARB_REQ, ARB_APP_CONN, ARB_MQTT, ARB_CLEAR, ARB_SETTINGS } arb_kind_t;
+typedef enum { ARB_REQ, ARB_APP_CONN, ARB_MQTT, ARB_CLEAR, ARB_SETTINGS,
+               ARB_APP_DEVREQ, ARB_DEVINFO } arb_kind_t;
 typedef enum { MQTT_BALANCE, MQTT_MEASURE, MQTT_REFRESH } arb_mqtt_t;
 
 /* ---- balance-write readback (§10) --------------------------------------- */
@@ -74,6 +75,9 @@ typedef struct {
                                  * ble_owner ping-pong runs at full speed,
                                  * starving the prio-3 supervisor -> task WDT
                                  * (garage/indoor crash loop, 2026-08-28). */
+    int64_t  devreq_deadline_us; /* D2: app 0x97 on a held link awaits a
+                                  * device-info record (0 = not waiting) */
+    bool     devreq_refreshed;   /* D2: link already refreshed this session */
 } pend_t;
 
 #define CONNECT_BACKOFF_US (2 * 1000000LL)  /* per-unit retry gap after a failed
@@ -373,10 +377,18 @@ static void on_response(const bms_response_t *rsp)
              * Backoff is EXPONENTIAL (2 s doubling to CFG_RECONNECT_CAP_MS):
              * a marginal-range unit that fails every attempt must not keep
              * the shared radio busy with a 5 s scan every 7 s forever. */
-            if (p->backoff_ms < 2000) p->backoff_ms = 2000;
-            else { p->backoff_ms *= 2;
-                   if (p->backoff_ms > CFG_RECONNECT_CAP_MS) p->backoff_ms = CFG_RECONNECT_CAP_MS; }
-            p->connect_after_us  = esp_timer_get_time() + (int64_t)p->backoff_ms * 1000;
+            if (p->backoff_ms == 0 && rt_app_connected(id)) {
+                /* First failure since the unit was last healthy, with a phone
+                 * waiting: one prompt retry (stage D2). backoff_ms=1 makes the
+                 * next failure start the ordinary 2 s doubling. */
+                p->backoff_ms = 1;
+                p->connect_after_us = esp_timer_get_time() + CFG_APP_FAST_RETRY_MS * 1000LL;
+            } else {
+                if (p->backoff_ms < 2000) p->backoff_ms = 2000;
+                else { p->backoff_ms *= 2;
+                       if (p->backoff_ms > CFG_RECONNECT_CAP_MS) p->backoff_ms = CFG_RECONNECT_CAP_MS; }
+                p->connect_after_us  = esp_timer_get_time() + (int64_t)p->backoff_ms * 1000;
+            }
             p->dispatch_after_us = esp_timer_get_time() + 100000;  /* 100 ms */
             ESP_LOGW(TAG, "bms %u txn cmd=%" PRIu64 " status=%d", id, rsp->cmd_id, rsp->status);
             break;
@@ -394,6 +406,8 @@ static void on_app_conn(uint8_t id, bool connected)
     if (!connected && !rt_app_connected(id)) return;
     rt_set_app(id, connected);
     pend_t *p = &s_pend[id];
+    p->devreq_deadline_us = 0;
+    p->devreq_refreshed = false;
     if (connected) {
         /* Bring the real link up; start the link-up guard (spec §4). */
         p->link_wait_deadline_us = esp_timer_get_time() + CFG_APP_LINK_TIMEOUT_MS * 1000LL;
@@ -408,12 +422,50 @@ static void on_app_conn(uint8_t id, bool connected)
     }
 }
 
+/* ---- D2: unanswered app 0x97 on a held link ---------------------------- */
+/* Captured failure (26 Sep 08:50:21 and 3 earlier): the phone attaches to a
+ * bank whose link A already holds, cell frames keep streaming, but the
+ * module never answers the app's 0x97, and the app gives up at ~6.5 s. A
+ * fresh connection makes the module answer (the supervisor's link-up
+ * bootstrap re-sends 0x97, whose reply reaches the phone). So: arm on the
+ * app's 0x97 only when the link was already held, disarm on any device-info
+ * record, and on expiry drop and re-raise the link once per app session. */
+static void on_app_devreq(uint8_t id)
+{
+    pend_t *p = &s_pend[id];
+    if (p->devreq_refreshed || p->devreq_deadline_us) return;
+    if (!rt_app_connected(id) || !rt_link_held(id)) return;
+    p->devreq_deadline_us = esp_timer_get_time() + CFG_APP_DEVINFO_WAIT_MS * 1000LL;
+}
+static void check_devreq(uint8_t id, int64_t now)
+{
+    pend_t *p = &s_pend[id];
+    if (!p->devreq_deadline_us || now <= p->devreq_deadline_us) return;
+    p->devreq_deadline_us = 0;
+    if (!rt_app_connected(id) || !rt_link_held(id)) return;
+    p->devreq_refreshed = true;
+    ESP_LOGW(TAG, "bms %u app 0x97 unanswered %d ms on held link -> refresh link",
+             id, CFG_APP_DEVINFO_WAIT_MS);
+    /* Existing bounce transaction, then a device-info poll whose dispatch
+     * re-raises the link without waiting for the supervisor's 5 s driver. */
+    bms_request_t d = { .bms_id = id, .kind = TXN_DISCONNECT,
+                        .source = SRC_INTERNAL, .response_needed = true,
+                        .timeout_ms = 3000 };
+    bms_request_t q = { .bms_id = id, .kind = TXN_POLL, .source = SRC_INTERNAL,
+                        .opcode = JK_CMD_DEVICE_INFO, .response_needed = true,
+                        .timeout_ms = 3000 };
+    if (!ring_push(p, &d) || !ring_push(p, &q))
+        ESP_LOGW(TAG, "bms %u pending full, refresh incomplete", id);
+    dispatch(id);
+}
+
 /* ---- link-up guard check (called each loop tick) ----------------------- */
 static void check_link_guards(void)
 {
     int64_t now = esp_timer_get_time();
     for (uint8_t id = 0; id < CFG_NUM_UNITS; id++) {
         pend_t *p = &s_pend[id];
+        check_devreq(id, now);
         if (p->link_wait_deadline_us && now > p->link_wait_deadline_us
             && !rt_link_held(id)) {
             ESP_LOGW(TAG, "bms %u app link-up timed out -> reachable-idle", id);
@@ -483,6 +535,17 @@ void arbiter_bounce(uint8_t id)
     arbiter_submit(&r);
 }
 
+void arbiter_note_app_devreq(uint8_t id)
+{
+    arb_msg_t m = { .kind = ARB_APP_DEVREQ, .bms_id = id };
+    arb_in_send(&m);
+}
+void arbiter_note_devinfo(uint8_t id)
+{
+    arb_msg_t m = { .kind = ARB_DEVINFO, .bms_id = id };
+    arb_in_send(&m);
+}
+
 void arbiter_set_app_connected(uint8_t id, bool connected)
 {
     arb_msg_t m = { .kind = ARB_APP_CONN, .bms_id = id, .connected = connected };
@@ -544,6 +607,12 @@ static void arbiter_task(void *arg)
                 }
                 case ARB_SETTINGS:
                     rb_on_settings(msg.bms_id);   /* balance-write readback (§10) */
+                    break;
+                case ARB_APP_DEVREQ:
+                    on_app_devreq(msg.bms_id);
+                    break;
+                case ARB_DEVINFO:
+                    s_pend[msg.bms_id].devreq_deadline_us = 0;
                     break;
                 case ARB_MQTT:
                     if (msg.mqtt.type == MQTT_BALANCE)

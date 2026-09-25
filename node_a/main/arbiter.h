@@ -22,6 +22,8 @@ void arbiter_poll(uint8_t bms_id, uint8_t opcode);          /* internal poll */
 void arbiter_set_app_connected(uint8_t bms_id, bool connected); /* from tunnel */
 void arbiter_notify_settings(uint8_t bms_id);  /* decoder: a settings frame decoded */
 void arbiter_clear_pending(uint8_t bms_id);  /* flush stale poll ring (link-up) */
+void arbiter_note_app_devreq(uint8_t bms_id); /* tunnel: phone wrote a 0x97 */
+void arbiter_note_devinfo(uint8_t bms_id);    /* decoder: device-info record */
 
 /* MQTT command entry points (validated inside the arbiter, §10). */
 void arbiter_balance_set(uint8_t bms_id, const char *json, const char *id);

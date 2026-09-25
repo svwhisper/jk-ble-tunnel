@@ -140,6 +140,11 @@ static void on_frame(uint8_t type, uint8_t bms_id, const uint8_t *pl, uint16_t l
             /* Capture what the app (phone) writes to the BMS char, so we can
              * learn the real cell-info request/handshake sequence (O-1/O-2). */
             mqtt_publish_appwrite(bms_id, pl + 2, len - 2);
+            /* JK command frame AA 55 90 EB <opcode>: the app's device-info
+             * request arms the held-link answer check (stage D2). */
+            static const uint8_t jk_cmd[4] = { 0xAA, 0x55, 0x90, 0xEB };
+            if (len - 2 >= 5 && !memcmp(pl + 2, jk_cmd, 4) && pl[6] == 0x97)
+                arbiter_note_app_devreq(bms_id);
             arbiter_app_write(bms_id, pl[0], pl[1], pl + 2, len - 2);
         }
         break;

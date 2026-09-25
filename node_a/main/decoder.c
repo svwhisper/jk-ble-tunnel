@@ -97,6 +97,7 @@ static void decoder_task(void *arg)
             break;
         }
         case JK_REC_DEVICE_INFO: {
+            arbiter_note_devinfo(it.bms_id);  /* answers a pending app 0x97 (D2) */
             /* Stream arming (fw 19.31): the 0x02 stream starts only when 0x96
              * is received AFTER the 0x97 exchange completes. Sending the pair
              * blind back-to-back races the BMS's 0x01/0x03 reply burst and the

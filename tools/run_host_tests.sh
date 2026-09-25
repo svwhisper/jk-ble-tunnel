@@ -26,6 +26,11 @@ cc "${flags[@]}" -Wno-unused-parameter -pthread -I tools/host_stubs -I node_a/ma
    node_a/main/command_validation.c components/jk_proto/jk_proto.c \
    "$json_dir/cJSON.c" -o "$test_dir/app_edges"
 "$test_dir/app_edges"
+cc "${flags[@]}" -Wno-unused-parameter -pthread -I tools/host_stubs -I node_a/main \
+   -I "$json_dir" tools/host_test_fast_recovery.c node_a/main/state_cache.c \
+   node_a/main/command_validation.c components/jk_proto/jk_proto.c \
+   "$json_dir/cJSON.c" -o "$test_dir/fast_recovery"
+"$test_dir/fast_recovery"
 cc "${flags[@]}" -pthread -I tools/host_stubs -I node_a/main \
    tools/host_test_state.c node_a/main/state_cache.c -o "$test_dir/state"
 "$test_dir/state"
