@@ -2,6 +2,16 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-09-26 09:01 — LIVE: A stage D2 (on accepted D1), B 10c
+
+D1 (direct connect) was accepted after the owner's test: cold 10/10 (bank 3
+4/4), warm 11/12. D2 (`241859a`, branch stage-d2-fast-recovery-20260926) adds
+a 250 ms first retry while a phone waits, plus a one-per-session link refresh
+when the app's 0x97 goes unanswered for 1.5 s on a held link. It was deployed
+09:01 for the owner's unattended testing; acceptance is pending. Bundle and
+backout (D1) are in ~/Downloads/jk-ble-tunnel-rollback/20260926-d2-fast-recovery/.
+A 6-hour capture is running into jk-ble-tunnel-local/20260926-cold-warm/capture-d2.jsonl.
+
 ## 2026-09-26 — READ FIRST: what actually decides app success (Claude)
 
 Resumed from Codex. Analysis of all 33 captured phone sessions (7–26 Sep):
