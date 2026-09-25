@@ -95,10 +95,21 @@ int ble_gap_terminate(uint16_t ch, uint8_t reason)
 int ble_gap_conn_find(uint16_t ch, struct ble_gap_conn_desc *d)
 { (void)ch; (void)d; return BLE_HS_ENOTCONN; }
 int ble_gap_disc_cancel(void) { return 0; }
+/* Stage D1: a connect never starts a discovery scan (only the operator scan
+ * dump does, and no test drives it), so any call here is a regression. */
 int ble_gap_disc(uint8_t a, int32_t t, const struct ble_gap_disc_params *p, ble_gap_event_fn *cb, void *arg)
-{ (void)a; (void)arg; assert(allow_connect && t == 5000 && p->passive == 1 && cb == scan_event); scan_calls++; return 0; }
+{ (void)a; (void)t; (void)p; (void)cb; (void)arg; scan_calls++; assert(!"unexpected discovery scan"); return 0; }
+/* Direct connect: public peer address from the fleet table, production
+ * full-duty initiator parameters, and the in-flight link as the owner. */
 int ble_gap_connect(uint8_t a, const ble_addr_t *b, int32_t t, const struct ble_gap_conn_params *p, ble_gap_event_fn *cb, void *arg)
-{ (void)a; (void)b; (void)p; assert(allow_connect && t == 5000 && cb == gap_event && arg == s_conn_inflight); connect_calls++; return 0; }
+{
+    assert(allow_connect && a == BLE_OWN_ADDR_PUBLIC && t == 5000);
+    assert(cb == gap_event && arg && arg == s_conn_inflight);
+    const link_t *l = arg;
+    assert(b->type == BLE_ADDR_PUBLIC && !memcmp(b->val, addr_for(l->bms_id), 6));
+    assert(p == &s_conn_params && p->scan_itvl == p->scan_window);
+    connect_calls++; return 0;
+}
 int ble_hs_mbuf_to_flat(const struct os_mbuf *o, void *p, uint16_t n, uint16_t *out)
 { assert(rx_bytes && o->len >= n); memcpy(p, rx_bytes, n); if (out) *out=n; return 0; }
 void mqtt_publish_llevent(const char *k, uint8_t id, int r)
@@ -124,7 +135,7 @@ static link_t *setup(uint16_t ch)
     allow_raw_publish=false; raw_publishes=0;
     s_ble_enabled = false;
     memset(s_links, 0, sizeof(s_links));
-    s_connecting = s_conn_inflight = NULL;
+    s_conn_inflight = NULL;
     svc_rc = chr_rc = write_rc = optional_write_rc = mtu_rc = terminate_rc = 0;
     svc_calls = chr_calls = write_calls = terminate_calls = responses = state_calls = 0;
     write_cb = NULL; write_arg = NULL;
@@ -263,7 +274,7 @@ int main(void)
     /* Reproduce captured internal retry: its unsolicited CONNECT cannot be
      * adopted safely after GATT failure. Keep that orphan guard unchanged.
      * With internal retry disabled, normal disconnect cleanup lets the next
-     * application request scan/connect/discover/subscribe successfully. */
+     * application request connect/discover/subscribe successfully. */
     for (unsigned handle = 0; handle <= 7; handle += 7) {
         link_t *retry_link = setup(handle); start(retry_link);
         struct ble_gatt_error gone = { .status = BLE_HS_ENOTCONN };
@@ -289,12 +300,7 @@ int main(void)
         bms_request_t retry = { .bms_id = 1, .kind = TXN_CONNECT,
             .cmd_id = 43, .timeout_ms = 9000 };
         exec_request(&retry);
-        assert(scan_calls == 1 && s_connecting && responses == 1);
-        struct ble_gap_event advert = { .type = BLE_GAP_EVENT_DISC };
-        advert.disc.addr.type = BLE_ADDR_PUBLIC;
-        memcpy(advert.disc.addr.val, s_connect_addr, 6);
-        scan_event(&advert, NULL);
-        assert(connect_calls == 1 && s_conn_inflight && !s_connecting);
+        assert(connect_calls == 1 && !scan_calls && s_conn_inflight && responses == 1);
         retry_link = s_conn_inflight;
         struct ble_gap_event connected = { .type = BLE_GAP_EVENT_CONNECT,
             .connect = { .status = 0, .conn_handle = handle } };

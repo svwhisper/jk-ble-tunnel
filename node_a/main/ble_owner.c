@@ -81,18 +81,13 @@ static uint32_t s_discovery_cookie;
  * token within a boot; exhaustion rejects new Write Requests, not aliases. */
 static uint32_t s_write_cookie;
 
-/* One scan/connect in flight at a time (scanning is a global radio resource).
- * The arbiter serialises per-BMS work, so this is rarely contended.
- * s_connecting covers the SCAN phase only; once ble_gap_connect is issued the
- * link moves to s_conn_inflight until its CONNECT event resolves. Keeping one
- * flag for both phases let burst-duplicate DISC events free an in-flight link
- * (multi-connect race — bank 0 held 4 phantom connections, 2026-08-30). */
-static link_t *s_connecting;
+/* One connect in flight at a time (initiating is a global radio resource).
+ * The arbiter serialises per-BMS work, so this is rarely contended. The link
+ * sits in s_conn_inflight from ble_gap_connect until its CONNECT event
+ * resolves; only that link may adopt a completion (the 2026-08-30 multi-
+ * connect race left bank 0 holding 4 phantom connections). */
 static link_t *s_conn_inflight;
-static char    s_connect_name[32];
-static uint8_t s_connect_addr[6];
 static int gap_event(struct ble_gap_event *event, void *arg);
-static int scan_event(struct ble_gap_event *event, void *arg);
 static link_t *link_by_bms(uint8_t id);
 
 /* ---- diagnostic scan dump (jkbms/bridge/cmd/scan) ----------------------- */
@@ -670,8 +665,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
          * bank 0 and corrupted its state (2026-08-30). */
         bool expected = (l == s_conn_inflight) && l->in_use && !l->conn_handle;
         s_conn_inflight = NULL;
-        /* (s_connecting is NOT cleared here: it now belongs solely to the
-         * scan phase, which may already be running for a DIFFERENT bank.) */
         if (event->connect.status == 0) {
             if (!expected) {
                 ESP_LOGW(TAG, "orphan connect handle=%u — terminating",
@@ -797,69 +790,24 @@ static int on_gatt_write_done(uint16_t conn_handle, const struct ble_gatt_error 
 }
 
 /* ---- transaction execution (ble_owner_task) ---------------------------- */
-/* Scan callback: match the target BMS by advertised name, then connect to
- * whatever address it advertised (spec §5 — match on name, never MAC). */
-static int scan_event_locked(struct ble_gap_event *event, void *arg)
-{
-    switch (event->type) {
-    case BLE_GAP_EVENT_DISC: {
-        if (!s_connecting) return 0;
-        /* PASSIVE scan + ADDRESS match: no SCAN_REQ traffic (scan-reqs CHIRP
-         * the units — parked bank 3 chirped during scans that never touched
-         * it), and public-address matching keeps the clone self-loop
-         * impossible (clones use static-random addresses). */
-        if (event->disc.addr.type != BLE_ADDR_PUBLIC) return 0;
-        if (memcmp(event->disc.addr.val, s_connect_addr, 6) != 0) return 0;
-        ble_gap_disc_cancel();
-        ble_addr_t addr = event->disc.addr;
-        link_t *l = s_connecting;
-        /* Resolve the scan phase BEFORE connecting: DISC events arrive in
-         * bursts (no duplicate filtering — and unit 0's Telink advertises
-         * fast, even while connected). Leaving s_connecting set until the
-         * CONNECT event let a queued duplicate DISC re-enter here, fail
-         * ble_gap_connect (busy), and free the link while the first connect
-         * was still pending; the orphan then completed into a freed slot and
-         * every arbiter retry stacked another connection onto the module. */
-        s_connecting = NULL;
-        s_conn_inflight = l;
-        /* Long-interval, long-supervision connection (see config.h rationale). */
-        static const struct ble_gap_conn_params cp = {
-            .scan_itvl = 0x0010, .scan_window = 0x0010,
-            .itvl_min = CFG_CONN_ITVL_MIN_MS * 4 / 5,   /* ms -> 1.25 ms units */
-            .itvl_max = CFG_CONN_ITVL_MAX_MS * 4 / 5,
-            .latency  = CFG_CONN_LATENCY,
-            .supervision_timeout = CFG_CONN_SUPERVISION_MS / 10, /* 10 ms units */
-            .min_ce_len = 0, .max_ce_len = 0,
-        };
-        if (ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &addr, 5000, &cp, gap_event, l) != 0) {
-            s_conn_inflight = NULL;
-            l->txn_active = false;
-            respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
-            l->in_use = false;
-        }
-        return 0;
-    }
-    case BLE_GAP_EVENT_DISC_COMPLETE:
-        /* Scan window ended with no match -> unreachable. */
-        if (s_connecting) {
-            link_t *l = s_connecting; s_connecting = NULL;
-            set_link_state(l->bms_id, LINK_UNREACHABLE, false);
-            if (l->txn_active) { l->txn_active = false;
-                respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
-            l->in_use = false;
-        }
-        return 0;
-    default: return 0;
-    }
-}
-
-static int scan_event(struct ble_gap_event *event, void *arg)
-{
-    xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
-    int rc = scan_event_locked(event, arg);
-    xSemaphoreGive(s_mtx_link_pool);
-    return rc;
-}
+/* Connect directly to the bank's burned-in PUBLIC address; no separate
+ * discovery scan (2026-09-26, stage D1). The old passive scan listened at
+ * 30% duty (30 ms / 100 ms, a C3-era WiFi-starvation guard) and only then
+ * connected, so the bank was often heard seconds late or not at all within
+ * 5 s: 7 of 37 captured scans missed (bank 3: 5 of 10) and median find was
+ * 1.4 s, against a phone app that abandons the attach at ~6.5 s. The
+ * initiator hears the first advertisement at the same duty the connect phase
+ * already used, bounded by the 5 s timeout and the arbiter's backoff.
+ * Address matching is unchanged: public-only, so a static-random clone can
+ * never be the peer. A connect sends no SCAN_REQ, so no extra chirps. */
+static const struct ble_gap_conn_params s_conn_params = {
+    .scan_itvl = 0x0010, .scan_window = 0x0010,
+    .itvl_min = CFG_CONN_ITVL_MIN_MS * 4 / 5,   /* ms -> 1.25 ms units */
+    .itvl_max = CFG_CONN_ITVL_MAX_MS * 4 / 5,
+    .latency  = CFG_CONN_LATENCY,
+    .supervision_timeout = CFG_CONN_SUPERVISION_MS / 10, /* 10 ms units */
+    .min_ce_len = 0, .max_ce_len = 0,
+};
 
 static void start_connect(link_t *l)
 {
@@ -867,15 +815,15 @@ static void start_connect(link_t *l)
     const uint8_t *addr = addr_for(l->bms_id);
     if (!name || !addr || !s_ble_enabled || net_wifi_down_ms() > CFG_WIFI_QUIESCE_MS) {
         /* Preserve target/BLE-off/WiFi-quiesce behavior in this isolated stage.
-         * These gates have not established that a remote scan failed either;
-         * their demand policy is a separate integration boundary. */
+         * These gates have not established that a remote connect failed
+         * either; their demand policy is a separate integration boundary. */
         l->txn_active = false;
         respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         l->in_use = false;
         return;
     }
-    if (s_connecting || s_conn_inflight || s_scan_active) {
-        /* No scan/connect was issued for this request. Waiting for our own
+    if (s_conn_inflight || s_scan_active) {
+        /* No connect was issued for this request. Waiting for our own
          * radio is not evidence the remote BMS failed. Do not free another
          * owner's slot or feed the remote-failure exponential backoff. */
         l->txn_active=false;
@@ -883,22 +831,15 @@ static void start_connect(link_t *l)
         l->in_use=false;
         return;
     }
-    ESP_LOGI(TAG, "scanning for bms %u ('%s')", l->bms_id, name);
-    s_connecting = l;
-    strlcpy(s_connect_name, name, sizeof(s_connect_name));
-    memcpy(s_connect_addr, addr, 6);
-    /* DUTY-CYCLED scan: 30 ms window / 100 ms interval (~30%% radio), NOT the
-     * NimBLE default continuous scan. The C3 shares one radio: continuous
-     * connect-scans starved WiFi of even null-frame airtime ("wifi:m f null"
-     * flood -> zombie association -> MQTT dead, 2026-08-28). JK units
-     * advertise ~1/s, so a 5 s window at 30%% still catches them. */
-    /* ACTIVE scan required: JK modules carry the device name in the SCAN
-     * RESPONSE, so passive scanning never matches (verified 16:31: 93 s of
-     * passive windows, zero connects). Chirp audio correlated with LL
-     * connect/disconnect events, not scan-reqs, so active costs nothing. */
-    struct ble_gap_disc_params dp = { .passive = 1, .itvl = 160, .window = 48 };
-    if (ble_gap_disc(BLE_OWN_ADDR_PUBLIC, 5000, &dp, scan_event, NULL) != 0) {
-        s_connecting = NULL;
+    ESP_LOGI(TAG, "connecting to bms %u ('%s')", l->bms_id, name);
+    ble_addr_t peer = { .type = BLE_ADDR_PUBLIC };
+    memcpy(peer.val, addr, 6);
+    s_conn_inflight = l;
+    /* A 5 s timeout completes as a failed CONNECT event (status != 0), which
+     * marks the bank unreachable exactly as an empty scan window used to. */
+    if (ble_gap_connect(BLE_OWN_ADDR_PUBLIC, &peer, 5000, &s_conn_params,
+                        gap_event, l) != 0) {
+        s_conn_inflight = NULL;
         l->txn_active = false;
         respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         l->in_use = false;
@@ -971,8 +912,8 @@ static void exec_request(const bms_request_t *req)
             respond(req->bms_id, req->cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
         } else if (l && l->table_ready) {   /* ready, including valid handle 0 */
             respond(req->bms_id, req->cmd_id, RESP_OK, NULL, 0, JK_REC_NONE);
-        } else if (l && (l == s_connecting || l == s_conn_inflight)) {
-            /* This bank is already mid scan/connect: don't stomp its txn or
+        } else if (l && l == s_conn_inflight) {
+            /* This bank is already mid connect: don't stomp its txn or
              * free its slot via start_connect's refuse path. Fail this
              * request; the arbiter's retry lands after resolution. */
             respond(req->bms_id, req->cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE);
@@ -1128,8 +1069,8 @@ static int scan_dump_event(struct ble_gap_event *event, void *arg)
     }
 }
 
-/* Runs on ble_owner_task. Takes the radio (cancelling any in-flight connect
- * scan) and starts an 8 s active discovery reported by scan_dump_event. */
+/* Runs on ble_owner_task. Takes the radio (skipped while a connect is in
+ * flight) and starts an 8 s active discovery reported by scan_dump_event. */
 static void do_scan_dump(void)
 {
     xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
@@ -1139,13 +1080,6 @@ static void do_scan_dump(void)
         ESP_LOGW(TAG, "scan dump: connect in flight — skipped");
         xSemaphoreGive(s_mtx_link_pool);
         return;
-    }
-    if (s_connecting) {
-        ble_gap_disc_cancel();
-        link_t *l = s_connecting; s_connecting = NULL;
-        if (l->txn_active) { l->txn_active = false;
-            respond(l->bms_id, l->txn.cmd_id, RESP_LINK_DOWN, NULL, 0, JK_REC_NONE); }
-        l->in_use = false;
     }
     s_scan_n = 0;
     s_scan_active = true;

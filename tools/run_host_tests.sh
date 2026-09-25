@@ -54,7 +54,7 @@ if cc "${guard_flags[@]}" '-DMYNEWT_VAL(x)=1' tools/host_test_discovery.c \
     echo "FAIL: Node A allowed hidden NimBLE reconnects" >&2
     exit 1
 fi
-rg -q 'Node A owns reconnects' "$test_dir/retry-guard.log"
+grep -q 'Node A owns reconnects' "$test_dir/retry-guard.log"
 echo "PASS: Node A effective-config guard rejects hidden reconnects"
 cc -DJK_ENABLE_WRITES=1 -fsanitize=thread -g -Wall -Wextra -Wno-unused-parameter -pthread \
    -ffunction-sections -Wl,-dead_strip -I tools/host_stubs -I node_a/main \

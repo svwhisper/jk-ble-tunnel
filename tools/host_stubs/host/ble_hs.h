@@ -6,6 +6,7 @@
 #include <stddef.h>
 #define BLE_HS_EALREADY 2
 #define BLE_HS_ENOTCONN 7
+#define BLE_HS_ETIMEOUT 13
 #define BLE_HS_EDONE 14
 #define BLE_ATT_ERR_UNLIKELY 14
 #define BLE_ATT_ERR_INSUFFICIENT_RES 17
