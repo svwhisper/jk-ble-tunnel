@@ -2,6 +2,16 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-09-26 11:04 — LIVE: B stage B1 (no NimBLE adv re-attempt), A stage D2
+
+"Three TUN_3 entries" in the JK app were real: after a 0x3E failed phone
+connection, NimBLE's CONN_REATTEMPT re-applied set 3's stale params+data to
+the last-started set, so TUN 1 and TUN 2 broadcast TUN_3-03 until reboot. B1
+(`6d9c828`) disables it (A already did) and adds a compile-time guard. Verified
+over the air with the app_probe survey. Bundle + backout (10c):
+~/Downloads/jk-ble-tunnel-rollback/20260926-b1-no-adv-reattempt/.
+master now equals the exact live source of both nodes.
+
 ## 2026-09-26 09:01 — LIVE: A stage D2 (on accepted D1), B 10c
 
 D1 (direct connect) was accepted after the owner's test: cold 10/10 (bank 3
