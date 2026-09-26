@@ -7,7 +7,8 @@ Living design/status doc. Keep current alongside code changes.
 **Live:** Node A at stage D3 (`827aa39`, ELF `04b08563…`, deployed 11:15);
 Node B at stage B1 (`6d9c828`, ELF `7f435161…`, deployed 11:04). Owner
 acceptance of D1/D2/B1: "cold and warm connections to all 4 flawless".
-D3 is deployed; its check is that bank-0 sessions show no `refresh link` line.
+D3 accepted 11:21: a bank-0 session (live device info at 1.8 s) ran with no
+`refresh link` and no reconnect (previously ~4 s into every bank-0 session).
 
 **What decides whether the JK app shows Status** (all 33 captured sessions,
 7–26 Sep, `docs/ATTACH_ANALYSIS_2026-09-26.md`): the bank's LIVE device-info
