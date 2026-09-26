@@ -35,10 +35,6 @@ streaming live cell frames, the cached burst sometimes does satisfy the app:
 So the cached burst is at best a partial help on warm links, and no help on
 cold ones.
 
-This is why the September work made no progress. B10a, B10c, R5a1 and R5a2 all
-refined the cached-replay path, and that path does not decide the outcome of a
-cold attach.
-
 ## Where the time goes
 
 | Attach type | Sessions | Failed | Cause of the failures |
@@ -82,19 +78,21 @@ but Status did not appear until the module dropped the link (0x208) and A
 reconnected, which produced a fresh live device-info frame at 07:28:58.7. That
 matches the warm "module ignores 0x97" failure mode.
 
-## What to do
+## What was done
 
-1. **D1 (built, not deployed):** connect directly to the bank's public address
-   instead of scanning first. This targets the largest cold-failure cause.
-   Bundle: `jk-ble-tunnel-rollback/20260926-d1-direct-connect/`.
-2. **Next, only if D1's test shows it is still needed:**
-   - Retry an immediate 0x23E / rc=7 failure without the 2 s backoff while the
-     phone is waiting.
-   - For a warm link whose module ignores the app's 0x97: if no live device-info
-     frame arrives within about 1.5 s, drop and re-establish the link. After a
-     fresh connection the module answered within about 1 s.
-3. **Shelve the B replay work** (the R5 series). Its defects are real but do not
-   decide whether Status appears. Leave B on Stage 10c.
+1. **D1:** A connects directly to the bank's public address instead of scanning
+   first. This targets the largest cold-failure cause.
+2. **D2:**
+   - An immediate 0x23E / rc=7 failure is retried after 250 ms instead of 2 s
+     while the phone is waiting.
+   - On a warm link whose module ignores the app's 0x97, if no live device-info
+     arrives within 1.5 s, A drops and re-establishes the link.
+3. **D3:** D2's check is also satisfied by a device-info header forwarded to the
+   phone, for bank 0, whose replies A rarely reassembles.
+4. **B1:** the name mix-up was separate: NimBLE's advertising re-attempt
+   re-applied TUN 3's name to other sets. It is now disabled on B.
+5. **B left unchanged otherwise.** The cached startup burst stays as it is; its
+   defects do not decide whether Status appears.
 
 ## Result: stage D1 deployed and accepted, 26 Sep 08:41
 

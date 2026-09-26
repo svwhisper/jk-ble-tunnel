@@ -2,75 +2,45 @@
 
 Living design/status doc. Keep current alongside code changes.
 
-## 2026-09-26 11:08 — ACCEPTED: A D1+D2, B B1 (master = live source)
+## READ FIRST — 2026-09-26: current state (master = exact live source)
 
-Owner: "cold and warm connections to all 4 flawless". Capture: 7/7 sessions
-after B1 on banks 0-3 passed (cold live device-info 1.2-3.7 s, warm 1.3-2.2 s);
-D2a fast retry observed rescuing an rc=7 establishment failure. Live images:
-A D2 ELF eac9908d…, B B1 ELF 7f435161… (bundles in jk-ble-tunnel-rollback/).
-FOLLOW-UP: D2b's held-link refresh false-fires on bank 0 (A does not decode
-its device-info reply), costing an unneeded reconnect ~4 s into each bank-0
-session; harmless to the app. Shelved and NOT deployed: all B replay work
-(B10b, R5a1/R5a2) and Codex's other local-only R-stages.
+**Live:** Node A at stage D3 (`827aa39`, ELF `04b08563…`, deployed 11:15);
+Node B at stage B1 (`6d9c828`, ELF `7f435161…`, deployed 11:04). Owner
+acceptance of D1/D2/B1: "cold and warm connections to all 4 flawless".
+D3 is deployed; its check is that bank-0 sessions show no `refresh link` line.
 
-## 2026-09-26 11:04 — LIVE: B stage B1 (no NimBLE adv re-attempt), A stage D2
+**What decides whether the JK app shows Status** (all 33 captured sessions,
+7–26 Sep, `docs/ATTACH_ANALYSIS_2026-09-26.md`): the bank's LIVE device-info
+reply (its answer to the app's 0x97) must reach the phone within ~6.5 s of
+attach; the app gives up at 6.6–7.2 s. B's cached startup burst never rescued
+a cold attach (at best it sometimes helps on a warm, streaming link).
 
-"Three TUN_3 entries" in the JK app were real: after a 0x3E failed phone
-connection, NimBLE's CONN_REATTEMPT re-applied set 3's stale params+data to
-the last-started set, so TUN 1 and TUN 2 broadcast TUN_3-03 until reboot. B1
-(`6d9c828`) disables it (A already did) and adds a compile-time guard. Verified
-over the air with the app_probe survey. Bundle + backout (10c):
-~/Downloads/jk-ble-tunnel-rollback/20260926-b1-no-adv-reattempt/.
-master now equals the exact live source of both nodes.
+**Stages (all A unless noted):**
+- D1 direct connect: A connects straight to the bank's public address instead
+  of a 30%-duty discovery scan (7/37 scans had missed 5 s; bank 3 5/10).
+  Result: cold 10/10, bank 3 4/4.
+- D2 fast recovery: (a) first failed connect while a phone waits retries after
+  250 ms instead of 2 s; (b) if the app's 0x97 goes unanswered 1.5 s on a link
+  A already held, drop and re-raise the link once per app session.
+- D3: D2's check is also disarmed by a device-info header in a chunk forwarded
+  to the phone (bank 0's Telink replies rarely complete A's reassembly, so D2
+  had been refreshing healthy bank-0 sessions).
+- B1 (Node B): NimBLE CONN_REATTEMPT disabled + compile guard. After a 0x3E
+  failed phone connection it re-applied set 3's params+data to the last-started
+  set, so TUN 1/TUN 2 broadcast "TUN_3-03" until reboot.
 
-## 2026-09-26 09:01 — LIVE: A stage D2 (on accepted D1), B 10c
+**Testing:** `tools/capture_attach.py <out.jsonl> [minutes]` (passive: A UDP
+:3766, B USB console, MQTT) and `tools/attach_sessions.py <capture.jsonl>`
+(one row per phone session: A connect, cached burst, first live device-info).
+Captures live outside the repo in `~/Downloads/jk-ble-tunnel-local/`. For
+advertised names, trust an over-the-air survey (app_probe board, key `s`),
+not the phone's list. Protocol that works: owner does cold (bank idle > 2 min)
+and warm (reopen < 20 s) attaches per bank, read-only.
 
-D1 (direct connect) was accepted after the owner's test: cold 10/10 (bank 3
-4/4), warm 11/12. D2 (`241859a`, branch stage-d2-fast-recovery-20260926) adds
-a 250 ms first retry while a phone waits, plus a one-per-session link refresh
-when the app's 0x97 goes unanswered for 1.5 s on a held link. It was deployed
-09:01 for the owner's unattended testing; acceptance is pending. Bundle and
-backout (D1) are in ~/Downloads/jk-ble-tunnel-rollback/20260926-d2-fast-recovery/.
-A 6-hour capture is running into jk-ble-tunnel-local/20260926-cold-warm/capture-d2.jsonl.
-
-## 2026-09-26 — READ FIRST: what actually decides app success (Claude)
-
-Resumed from Codex. Analysis of all 33 captured phone sessions (7–26 Sep):
-Status appears only when the bank's LIVE device-info reply reaches the phone
-within ~6.5 s of attach; the app gives up at 6.6–7.2 s. B's cached burst was on
-time in all 10 failures and never rescued one, so the B replay work (B10x, R5x)
-is shelved; B stays on 10c. 8/10 failures were cold attaches where A had no
-usable link in time, mostly A's 30%-duty discovery scan (7/37 scans missed 5 s;
-bank 3 missed 5/10). 2/10 were warm links whose module ignored the app's 0x97.
-Evidence and tool: ~/Downloads/jk-ble-tunnel-local/20260926-cold-warm/
-(ANALYSIS.md, sessions.py, sessions.txt, capture.py).
-
-Stage D1 (connect directly to the public address, no scan) is built and frozen
-at ~/Downloads/jk-ble-tunnel-rollback/20260926-d1-direct-connect/ from branch
-stage-d1-direct-connect-20260926 (1a576ab). NOT deployed; needs an attended OTA
-plus the cold/warm test (see its MANIFEST.md). Isolated B R5a1 is committed at
-ff8294f (stage-r5a1-b10c-20260915) but shelved. Change log is
-~/.claude/CHANGELOG.md again; ~/.codex/CHANGELOG.md is frozen history.
-
-## 2026-09-15 — isolated R4a candidate from live R1c
-
-This worktree is deliberately based on R1c5c91296, not the cumulative
-flow-control branch. Live pair last verified12 September: A R1c / B10c HOLD.
-Only three A production files change: classify radio contention separately,
-preserve explicit/implicit CONNECT demand, keep genuine failure backoff intact.
-No B, wire, quiet-idle, configuration or owned-mode changes. Later R1d/R2/R3
-stages are excluded. See docs/R4A_ISOLATED.md. Candidate is NOT deployed.
-
-## 2026-09-07 overnight — LOCAL flow-control remediation, NO OTA
-
-Owner authorized unattended local work from 22:30 after the complete review.
-Current contract: `docs/FLOW_CONTROL_CONTRACT.md`; checkpoint/test handoff:
-`docs/OVERNIGHT_FLOW_WORK.md`. Work is isolated on
-`flow-control-local-20260907`; deployment branch and all saved rollback images
-are preserved. Recorded live pair remains A5c1 / B10c **HOLD/not accepted**.
-Do not mistake local build output or passing host tests for phone acceptance.
-The later review supersedes historical claims below that transport is exonerated,
-cache age implies freshness, or unverified settings retries are automatically safe.
+**Rules:** one node at a time; push an explicit `--bin`; verify binary SHA,
+embedded ELF SHA and `/ota/status` state 2; never OTA with a phone attached;
+phone tests read-only; iBMS charge control is live (no alarm-capable JK work
+without disabling it first). Change log: `~/.claude/CHANGELOG.md`.
 
 ## BMS 0 REPLACEMENT INBOUND (owner, 2026-09-03; arrives ~w/c 2026-09-07)
 Unit 0 is hardware-confirmed bad (re-wedged even after power cycles); the
