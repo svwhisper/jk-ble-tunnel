@@ -2,6 +2,17 @@
 
 Living design/status doc. Keep current alongside code changes.
 
+## 2026-09-26 11:08 — ACCEPTED: A D1+D2, B B1 (master = live source)
+
+Owner: "cold and warm connections to all 4 flawless". Capture: 7/7 sessions
+after B1 on banks 0-3 passed (cold live device-info 1.2-3.7 s, warm 1.3-2.2 s);
+D2a fast retry observed rescuing an rc=7 establishment failure. Live images:
+A D2 ELF eac9908d…, B B1 ELF 7f435161… (bundles in jk-ble-tunnel-rollback/).
+FOLLOW-UP: D2b's held-link refresh false-fires on bank 0 (A does not decode
+its device-info reply), costing an unneeded reconnect ~4 s into each bank-0
+session; harmless to the app. Shelved and NOT deployed: all B replay work
+(B10b, R5a1/R5a2) and Codex's other local-only R-stages.
+
 ## 2026-09-26 11:04 — LIVE: B stage B1 (no NimBLE adv re-attempt), A stage D2
 
 "Three TUN_3 entries" in the JK app were real: after a 0x3E failed phone
