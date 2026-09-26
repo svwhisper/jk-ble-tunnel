@@ -125,6 +125,16 @@ void mqtt_publish_raw(uint8_t id, const uint8_t *d, uint16_t n)
     assert(pthread_mutex_unlock(s_mtx_link_pool)==0);
     raw_publishes++;
 }
+/* Stage D3: called after a forwarded chunk carried a device-info header.
+ * Must run with the link-pool mutex released (it enqueues to the arbiter). */
+static unsigned devinfo_notes;
+static uint8_t devinfo_last_id;
+void arbiter_note_devinfo(uint8_t id)
+{
+    assert(pthread_mutex_trylock(s_mtx_link_pool) == 0);
+    assert(pthread_mutex_unlock(s_mtx_link_pool) == 0);
+    devinfo_notes++; devinfo_last_id = id;
+}
 bool net_wifi_up(void) { return true; }
 int64_t net_wifi_down_ms(void) { return 0; }
 

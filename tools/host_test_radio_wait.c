@@ -53,5 +53,39 @@ int main(void)
         assert(!terminate_calls);
     }
     puts("PASS: 2 production radio-contention scenarios; direct connect targets the public address; connect timeout -> unreachable");
+
+    /* Stage D3: a device-info header in a chunk forwarded to an attached phone
+     * notifies the arbiter (outside the mutex), wherever it sits in the chunk
+     * and whether or not reassembly completes a frame. Other record types,
+     * or no phone attached, do not. */
+    const uint8_t at_hb[4] = { 'A', 'T', '\r', '\n' };
+    const uint8_t devhdr[5] = { 0x55, 0xAA, 0xEB, 0x90, 0x03 };
+    const uint8_t cellhdr[5] = { 0x55, 0xAA, 0xEB, 0x90, 0x02 };
+    unsigned d3 = 0;
+    for (unsigned attached = 0; attached < 2; attached++) {
+        for (unsigned kind = 0; kind < 3; kind++) {           /* devinfo, cells, AT only */
+            for (unsigned pos = 0; pos < 40; pos += 13) {
+                link_t *l = setup(7);
+                l->txn_active = false; l->table_ready = true;
+                test_runtime[1].app_connected = attached;
+                uint8_t chunk[64]; memset(chunk, 0x11, sizeof(chunk));
+                memcpy(chunk + pos, at_hb, sizeof(at_hb));
+                if (kind == 0) memcpy(chunk + pos + 4, devhdr, sizeof(devhdr));
+                if (kind == 1) memcpy(chunk + pos + 4, cellhdr, sizeof(cellhdr));
+                rx_bytes = chunk; capture_raw = true; raw_len = 0; devinfo_notes = 0;
+                struct os_mbuf om = { .len = sizeof(chunk) };
+                struct ble_gap_event ev = { .type = BLE_GAP_EVENT_NOTIFY_RX,
+                    .notify_rx = { .conn_handle = 7, .om = &om } };
+                gap_event(&ev, NULL);
+                bool want = attached && kind == 0;
+                assert(devinfo_notes == (want ? 1u : 0u));
+                if (want) assert(devinfo_last_id == 1);
+                assert(raw_len == (attached ? sizeof(chunk) : 0u));
+                d3++;
+            }
+        }
+    }
+    test_runtime[1].app_connected = false; capture_raw = false;
+    printf("PASS: stage D3 forwarded device-info header -> arbiter note, %u cases\n", d3);
     return 0;
 }

@@ -15,6 +15,7 @@
 #include "queues.h"
 #include "config.h"
 #include "state_cache.h"
+#include "arbiter.h"
 #include "net_util.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -358,8 +359,27 @@ static void on_complete_frame(link_t *l, const uint8_t *frame, uint16_t flen)
     }
 }
 
-static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
+/* A device-info response header (55 AA EB 90 03) inside a chunk forwarded to
+ * the phone: evidence the module answered, independent of reassembly. Unit
+ * 0's Telink module interleaves AT heartbeats and ticker frames with its
+ * replies, so its device-info rarely completes reassembly and the decoder
+ * never saw it -- stage D2 then refreshed healthy bank-0 sessions (2026-09-26).
+ * This is the same evidence Node B uses for "live device info reached the
+ * phone". A header split across two chunks is missed (falls back to the D2
+ * refresh, the pre-D3 behaviour). */
+static bool chunk_has_devinfo_header(const uint8_t *d, uint16_t len)
 {
+    static const uint8_t hdr[5] = { 0x55, 0xAA, 0xEB, 0x90, 0x03 };
+    for (uint16_t i = 0; i + sizeof(hdr) <= len; i++)
+        if (!memcmp(d + i, hdr, sizeof(hdr))) return true;
+    return false;
+}
+
+/* Returns true when a chunk forwarded to an attached phone carried a
+ * device-info header (the caller notifies the arbiter outside the mutex). */
+static bool on_notify(link_t *l, const uint8_t *data, uint16_t len)
+{
+    bool devinfo = false;
     /* App transparency (spec §6): while an app holds this identity, forward
      * the chunk VERBATIM (TUN_RAW) before reassembly, preserving wire order.
      * The real stream carries AT heartbeats and AA5590EB C8 command-acks that
@@ -370,6 +390,7 @@ static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
         rw.bms_id = l->bms_id; rw.idx = 0; rw.raw = true; rw.len = len;
         memcpy(rw.data, data, len);
         xQueueSend(g_q_notify, &rw, 0);
+        devinfo = chunk_has_devinfo_header(data, len);
     }
 
     size_t off = 0;
@@ -381,6 +402,7 @@ static void on_notify(link_t *l, const uint8_t *data, uint16_t len)
         off += consumed;
         if (frame) on_complete_frame(l, frame, flen);
     }
+    return devinfo;
 }
 
 /* ---- write-op selection ------------------------------------------------- */
@@ -748,14 +770,15 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         uint8_t tmp[256]; uint16_t n = OS_MBUF_PKTLEN(event->notify_rx.om);
         if (n > sizeof(tmp)) n = sizeof(tmp);
         if (ble_hs_mbuf_to_flat(event->notify_rx.om, tmp, n, NULL) != 0) return 0;
-        uint8_t capture_id = 0xFF;
+        uint8_t capture_id = 0xFF, devinfo_id = 0xFF;
         xSemaphoreTake(s_mtx_link_pool, portMAX_DELAY);
         link_t *l = link_by_conn(event->notify_rx.conn_handle);
         if (l) {
             if (esp_timer_get_time() < s_rawcap_until_us) capture_id = l->bms_id;
-            on_notify(l, tmp, n);
+            if (on_notify(l, tmp, n)) devinfo_id = l->bms_id;
         }
         xSemaphoreGive(s_mtx_link_pool);
+        if (devinfo_id != 0xFF) arbiter_note_devinfo(devinfo_id);  /* D3 */
         /* Raw bytes were copied before reassembly. Diagnostic publication
          * follows processing, outside the transaction critical section. */
         if (capture_id != 0xFF) mqtt_publish_raw(capture_id, tmp, n);
