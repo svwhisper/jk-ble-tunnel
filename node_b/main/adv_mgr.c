@@ -17,6 +17,17 @@
 /* Defined in ble_periph.c — all ext-adv instances route connections here. */
 extern int ble_periph_gap_event(struct ble_gap_event *e, void *a);
 
+/* adv_mgr owns every advertising (re)start. NimBLE's connection re-attempt
+ * keeps a single global snapshot of the last-configured instance's params and
+ * data but tracks the last-STARTED instance, so after a 0x3E establishment
+ * failure it rewrote another set with TUN 3's name (2026-09-26). Check the
+ * effective config, not only sdkconfig.defaults. */
+#ifdef ESP_PLATFORM
+#if MYNEWT_VAL(BLE_ENABLE_CONN_REATTEMPT)
+#error "Node B's adv_mgr owns advertising: disable CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT"
+#endif
+#endif
+
 static const char *TAG = "adv_mgr";
 
 typedef struct {
